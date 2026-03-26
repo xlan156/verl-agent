@@ -132,4 +132,5 @@ data/
 .tmp
 *ports
 job_log/
+video/
 

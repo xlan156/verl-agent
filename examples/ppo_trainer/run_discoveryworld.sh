@@ -4,12 +4,14 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 
 # Scenario / difficulty selection (override when calling the script)
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
-DIFFICULTY="${DIFFICULTY:-easy}"
+DIFFICULTY="${DIFFICULTY:-Easy}"
 
 num_cpus_per_env_worker=0.1 # CPU per DiscoveryWorld env worker; reduce to save CPU.
 
 train_data_size=2 # number of parallel tasks (matches other PPO examples)
 val_data_size=1
+
+model_name=Qwen2.5-1.5B
 
 # Data preparation: only indicates modality (text) and data size.
 python3 -m examples.data_preprocess.prepare \
@@ -28,7 +30,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    actor_rollout_ref.model.path=Qwen/$model_name \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=4 \
@@ -54,7 +56,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.invalid_action_penalty_coef=0.1 \
     critic.optim.lr=1e-5 \
     critic.model.use_remove_padding=True \
-    critic.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    critic.model.path=Qwen/$model_name \
     critic.model.enable_gradient_checkpointing=True \
     critic.ppo_micro_batch_size_per_gpu=1 \
     critic.model.fsdp_config.param_offload=False \
@@ -67,9 +69,9 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['console'] \
     trainer.project_name='verl_agent_discoveryworld' \
-    trainer.experiment_name='ppo_qwen2.5_0.5b' \
+    trainer.experiment_name="ppo_${model_name}" \
     trainer.n_gpus_per_node=1 \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \

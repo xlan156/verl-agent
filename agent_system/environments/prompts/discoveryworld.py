@@ -22,7 +22,7 @@ Your task is:
 {task_description}
 
 Below is the current UI state of the world, from the agent's perspective:
-{ui}
+{ui_json}
 
 You can issue actions in this environment by returning a JSON dictionary with keys like
 "action", "arg1", "arg2", etc.

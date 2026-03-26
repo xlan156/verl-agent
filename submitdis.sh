@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --partition=gpu_mig
 #SBATCH --gpus=1
-#SBATCH --job-name=dis
+#SBATCH --job-name=agent_dis
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
 #SBATCH --time=00:20:00
-#SBATCH --output=job_log/agent_dis_output_%A.txt
-#SBATCH --error=job_log/agent_dis_error_%A.txt
+#SBATCH --output=job_log/%A/agent_dis_output_%A.txt
+#SBATCH --error=job_log/%A/agent_dis_error_%A.txt
 #SBATCH --reservation=terv92681
 
 module load 2023
