@@ -131,4 +131,5 @@ outputs
 data/
 .tmp
 *ports
+job_log/
 

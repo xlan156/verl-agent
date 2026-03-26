@@ -15,14 +15,16 @@
 
 from typing import List, Tuple, Dict, Union, Any
 from collections import defaultdict
-import torch
-import numpy as np
 from functools import partial
 import os
+
+import numpy as np
+from omegaconf import OmegaConf
+
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
-from omegaconf import OmegaConf
+
 
 def parse_gamefile(infos):
     gamefile = []
@@ -599,6 +601,94 @@ class AppWorldEnvironmentManager(EnvironmentManagerBase):
                 postprocess_text_obs.append(obs)
         return postprocess_text_obs
 
+
+
+class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+
+    def reset(self, kwargs):
+        text_obs, infos = self.envs.reset()
+
+        self.memory.reset(batch_size=len(text_obs))
+        self.tasks = [info.get("task_description", "") for info in infos]
+        self.pre_text_obs = text_obs
+
+        full_text_obs = self.build_text_obs(text_obs, infos, init=True)
+        return {"text": full_text_obs, "image": None, "anchor": text_obs}, infos
+
+    def step(self, text_actions: List[str]):
+        actions, valids = self.projection_f(text_actions)
+
+        text_obs, rewards, dones, infos = self.envs.step(actions)
+
+        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        self.pre_text_obs = text_obs
+
+        full_text_obs = self.build_text_obs(text_obs, infos, init=False)
+
+        for i, info in enumerate(infos):
+            info["is_action_valid"] = to_numpy(valids[i])
+
+        next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+
+        return next_observations, rewards, dones, infos
+
+    def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
+        postprocess_text_obs: List[str] = []
+
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action",
+            )
+        else:
+            memory_contexts, valid_lens = None, None
+
+        for i in range(len(text_obs)):
+            task_desc = infos[i].get("task_description", "")
+            known_actions = infos[i].get("known_actions", {})
+            teleport_locs = infos[i].get("teleport_locations", {})
+            last_result = infos[i].get("last_action_result", {})
+
+            ui_json = text_obs[i]
+            known_actions_str = json.dumps(known_actions, indent=2, sort_keys=True)
+            teleport_str = json.dumps(teleport_locs, indent=2, sort_keys=True)
+            last_result_str = json.dumps(last_result, indent=2, sort_keys=True) if last_result else "{}"
+
+            if init or self.config.env.history_length <= 0 or memory_contexts is None:
+                obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
+                    task_description=task_desc,
+                    ui_json=ui_json,
+                    known_actions=known_actions_str,
+                    teleport_locations=teleport_str,
+                    last_action_result=last_result_str,
+                )
+            else:
+                history_block = memory_contexts[i]
+                history_len = valid_lens[i]
+
+                obs = DISCOVERYWORLD_TEMPLATE.format(
+                    task_description=task_desc,
+                    step_count=len(self.memory[i]),
+                    history_length=history_len,
+                    action_history=history_block,
+                    current_step=len(self.memory[i]) + 1,
+                    ui_json=ui_json,
+                    known_actions=known_actions_str,
+                    teleport_locations=teleport_str,
+                    last_action_result=last_result_str,
+                )
+
+            postprocess_text_obs.append(obs)
+
+        return postprocess_text_obs
+
+
 def make_envs(config):
     """
     Create enviroments 
@@ -627,6 +717,7 @@ def make_envs(config):
         envs = GymCardEnvironmentManager(_envs, projection_f, config)
         val_envs = GymCardEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
+    
     elif "alfworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.alfworld import build_alfworld_envs, alfworld_projection
         if config.env.env_name == 'alfworld/AlfredThorEnv':
@@ -646,6 +737,7 @@ def make_envs(config):
         envs = AlfWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AlfWorldEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
+    
     elif "sokoban" in config.env.env_name.lower():
         from agent_system.environments.env_package.sokoban import build_sokoban_envs, sokoban_projection
         env_kwargs = {
@@ -661,6 +753,7 @@ def make_envs(config):
         envs = SokobanEnvironmentManager(_envs, projection_f, config)
         val_envs = SokobanEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
+    
     elif "webshop" in config.env.env_name.lower():
         from agent_system.environments.env_package.webshop import build_webshop_envs, webshop_projection
         if config.env.webshop.use_small:
@@ -685,6 +778,7 @@ def make_envs(config):
         import time
         time.sleep((config.data.train_batch_size * group_n + config.data.val_batch_size) * 0.1) # wait for the envs to be ready
         return envs, val_envs
+    
     elif "appworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.appworld import build_appworld_envs, appworld_projection
         _envs = build_appworld_envs(dataset_name='train', seed=config.env.seed, env_num=config.data.train_batch_size, group_n=group_n, start_server_id=0, resources_per_worker=resources_per_worker)
@@ -693,6 +787,42 @@ def make_envs(config):
         projection_f = partial(appworld_projection)
         envs = AppWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AppWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    
+    elif "discoveryworld" in config.env.env_name.lower():
+        from agent_system.environments.env_package.discovery import build_discoveryworld_envs, discoveryworld_projection
+
+        # Optional nested config: env.discoveryworld.{scenario_name,difficulty}
+        discovery_cfg = getattr(config.env, "discoveryworld", None)
+        scenario_name = getattr(discovery_cfg, "scenario_name", None)
+        difficulty = getattr(discovery_cfg, "difficulty", None)
+
+        env_kwargs = {
+            "scenario_name": scenario_name,
+            "difficulty": difficulty,
+            "max_steps": config.env.max_steps,
+        }
+
+        _envs = build_discoveryworld_envs(
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            is_train=True,
+            env_kwargs=env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        _val_envs = build_discoveryworld_envs(
+            seed=config.env.seed + 1,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            is_train=False,
+            env_kwargs=env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        
+        projection_f = partial(discoveryworld_projection)
+        envs = DiscoveryWorldEnvironmentManager(_envs, projection_f, config)
+        val_envs = DiscoveryWorldEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     else:
         print("Environment not supported")

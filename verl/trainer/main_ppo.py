@@ -47,11 +47,13 @@ def run_ppo(config) -> None:
         print(f"ray init kwargs: {ray_init_kwargs}")
         ray.init(**OmegaConf.to_container(ray_init_kwargs))
 
-    runner = TaskRunner.remote()
-    ray.get(runner.run.remote(config))
+    #runner = TaskRunner.remote()
+    #ray.get(runner.run.remote(config))
+    runner = TaskRunner()
+    runner.run(config)
 
 
-@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
+#@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
 class TaskRunner:
     def run(self, config):
         # print initial config

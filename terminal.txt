@@ -1,0 +1,63 @@
+module purge
+module load 2023
+# module load Z3/4.12.2-GCCcore-12.3.0-Python-3.11.3
+module load Miniconda3/23.5.2-0
+
+# DiscoveryWorld
+conda create -p /scratch-shared/20242359/envs/verl-agent-dis python=3.10 -y
+conda activate /scratch-shared/20242359/envs/verl-agent-dis
+cd ./agent_system/environments/env_package/discovery/DiscoveryWorld
+pip install -r requirements.txt
+pip install -e .
+
+cd .. (root)
+pip3 install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --upgrade pip setuptools wheel
+
+mkdir -p ~/.tmp
+TMPDIR=/.tmp pip install flash-attn==2.7.4.post1 --no-build-isolation
+cd verl-agent
+pip3 install -e .
+pip3 install vllm==0.8.2
+
+# ---------------------------------
+# Webshop
+conda create -n verl-agent-webshop python=3.10
+conda create -p /scratch-shared/20242359/envs/verl-agent-webshop python=3.10 -y
+cd ./agent_system/environments/env_package/webshop/webshop
+./setup.sh -d all
+
+cd .. (root)
+pip3 install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+pip install --upgrade pip setuptools wheel
+
+cd HOME
+mkdir -p ~/.tmp
+TMPDIR=~/.tmp pip install flash-attn==2.7.4.post1 --no-build-isolation
+cd verl-agent
+
+pip3 install -e .
+pip3 install vllm==0.8.2
+
+conda activate verl-agent-webshop
+sh examples/ppo_trainer/run_webshop.sh
+sh examples/gigpo_trainer/run_webshop.sh
+sh examples/grpo_trainer/run_webshop.sh
+
+# If SpaCy problem: python -m spacy download en_core_web_sm
+
+# =============
+#!/bin/bash
+#SBATCH --partition=gpu_mig
+#SBATCH --gpus=1
+#SBATCH --job-name=CheckEnvironment
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=00:02:00
+#SBATCH --output=slurm_output_%A.txt
+#SBATCH --error=slurm_error_%A.txt
+#SBATCH --reservation=terv92681
+
+cd ~
+conda activate verl-agent-dis
+TMPDIR=/.tmp pip install flash-attn==2.7.4.post1 --no-build-isolation

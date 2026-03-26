@@ -1,23 +1,28 @@
 #!/bin/bash
 #SBATCH --job-name=verl-ray-on-slurm
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --mem=200G
-#SBATCH --partition=your-partition
-#SBATCH --time=01:00:00
-#SBATCH --account=your-account
+#SBATCH --partition=gpu_mig
+#SBATCH --time=00:20:00
 #SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=18
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
 # load necessary modules
+module load 2023
+module load Miniconda3/23.5.2-0
+module load CUDA/12.4.0
+
+cd ~/projects/verl-agent
+source /sw/arch/RHEL8/EB_production/2023/software/Miniconda3/23.5.2-0/etc/profile.d/conda.sh
+conda activate verl-agent-dis
 
 # replace these information with your own
-verl_workdir=/path/to/verl
-train_files=/path/to/gsm8k/train.parquet
-val_files=/path/to/gsm8k/test.parquet
-apptainer_image_path=/path/to/verl-ngc.sif
+verl_workdir=$HOME/data/verl-agent/verl_ray
+train_files=$HOME/data/verl-agent/text/train.parquet
+val_files=$HOME/data/verl-agent/text/test.parquet
+apptainer_image_path=$HOME/data/verl-agent/verl-ngc.sif
 # replace these information with your own
 
 # Getting the node names
@@ -81,10 +86,10 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     data.max_response_length=256 \
     actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.actor.use_kl_loss=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     critic.optim.lr=1e-5 \
