@@ -16,8 +16,9 @@
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
+from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import DiscoveryWorldAPI
 
-AVAILABLE_ACTIONS = ["MOVE_DIRECTION", "ROTATE_DIRECTION", "PICKUP", "USE", "TALK", "PUT"]
+AVAILABLE_ACTIONS = DiscoveryWorldAPI.listKnownActionsStatic()
 
 # 用于解析 LLM 输出中的代码块
 _CODE_BLOCK_JSON_RE = re.compile(r"```json(.*?)```", re.DOTALL | re.IGNORECASE)
