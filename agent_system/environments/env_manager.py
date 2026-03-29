@@ -652,12 +652,10 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
         for i in range(len(text_obs)):
             task_desc = infos[i].get("task_description", "")
-            known_actions = infos[i].get("known_actions", {})
             teleport_locs = infos[i].get("teleport_locations", {})
             last_result = infos[i].get("last_action_result", {})
 
             ui_json = text_obs[i]
-            known_actions_str = json.dumps(known_actions, indent=2, sort_keys=True)
             teleport_str = json.dumps(teleport_locs, indent=2, sort_keys=True)
             last_result_str = json.dumps(last_result, indent=2, sort_keys=True) if last_result else "{}"
 
@@ -665,7 +663,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     task_description=task_desc,
                     ui_json=ui_json,
-                    known_actions=known_actions_str,
                     teleport_locations=teleport_str,
                     last_action_result=last_result_str,
                 )
@@ -680,7 +677,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                     action_history=history_block,
                     current_step=len(self.memory[i]) + 1,
                     ui_json=ui_json,
-                    known_actions=known_actions_str,
                     teleport_locations=teleport_str,
                     last_action_result=last_result_str,
                 )

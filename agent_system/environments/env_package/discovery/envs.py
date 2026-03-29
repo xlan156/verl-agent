@@ -62,21 +62,14 @@ class DiscoveryWorldEnv:
         assert self._api is not None
         observation = self._api.getAgentObservation(agentIdx=0)
         ui = observation.get("ui", {})
-        ui = self.compress_ui_observation(ui)
 
-        text_obs = json.dumps(ui, indent=2, sort_keys=True)
+        text_obs = json.dumps(self.compress_ui_observation(ui), indent=2, sort_keys=True)
 
-        task_desc = ""
-        try:
-            if ui.get("taskProgress"):
-                task_desc = ui["taskProgress"][0]["description"]
-        except Exception:
-            task_desc = ""
+        task_desc = ui.get("taskProgress")[0].get("description")
 
         info: Dict[str, Any] = {
             "raw_observation": observation,
             "task_description": task_desc,
-            "known_actions": self._api.listKnownActions(limited=False),
             "teleport_locations": self._api.listTeleportLocationsDict(),
             "last_action_result": self._last_action_result,
             "score_normalized": self._score_normalized(),

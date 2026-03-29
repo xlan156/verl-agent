@@ -1,3 +1,28 @@
+#!/bin/bash
+#SBATCH --partition=gpu_mig
+#SBATCH --job-name=agent_dis
+#SBATCH --gpus=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=1:30:00
+#SBATCH --mem=60G
+#SBATCH --output=job_log/%A/agent_dis_output_%A.txt
+#SBATCH --error=job_log/%A/agent_dis_error_%A.txt
+#SBATCH --reservation=terv92681
+
+module load 2023
+module load Miniconda3/23.5.2-0
+module load CUDA/12.4.0
+
+cd ~
+cd projects/verl-agent
+source /sw/arch/RHEL8/EB_production/2023/software/Miniconda3/23.5.2-0/etc/profile.d/conda.sh
+
+conda activate verl-agent-dis
+
+export HYDRA_FULL_ERROR=1
+unset ROCR_VISIBLE_DEVICES
+
 set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=XFORMERS
@@ -7,17 +32,17 @@ SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
 num_cpus_per_env_worker=0.1 # CPU per DiscoveryWorld env worker; reduce to save CPU.
-
-train_data_size=1 # number of parallel tasks (matches other PPO examples)
-val_data_size=1
+train_data_size=32 # number of parallel tasks (matches other PPO examples)
+val_data_size=8
+# CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
 model_name=Qwen2.5-0.5B
 
 # Data preparation: only indicates modality (text) and data size.
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
-    --train_data_size 64 \
-    --val_data_size 64
+    --train_data_size $train_data_size \
+    --val_data_size $val_data_size
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gae \
@@ -42,7 +67,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
@@ -74,7 +99,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.experiment_name="ppo_${model_name}" \
     trainer.n_gpus_per_node=1 \
     trainer.nnodes=1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq=1 \
     trainer.test_freq=5 \
-    trainer.total_epochs=50 \
+    trainer.total_epochs=5 \
     trainer.val_before_train=True "$@"

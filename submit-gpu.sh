@@ -1,3 +1,26 @@
+#!/bin/bash
+#SBATCH --partition=gpu_h100
+#SBATCH --job-name=agent_dis
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --gpus-per-node=2
+#SBATCH --time=01:00:00
+#SBATCH --output=job_log/%j/agent_dis_h100_output_%j.txt
+#SBATCH --error=job_log/%j/agent_dis_h100_error_%j.txt
+
+module load 2023
+module load Miniconda3/23.5.2-0
+module load CUDA/12.4.0
+
+cd ~
+cd projects/verl-agent
+source /sw/arch/RHEL8/EB_production/2023/software/Miniconda3/23.5.2-0/etc/profile.d/conda.sh
+
+conda activate verl-agent-dis
+
+export HYDRA_FULL_ERROR=1
+unset ROCR_VISIBLE_DEVICES
+
 set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=XFORMERS
@@ -6,18 +29,19 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
-num_cpus_per_env_worker=0.1 # CPU per DiscoveryWorld env worker; reduce to save CPU.
+num_cpus_per_env_worker=1 # CPU per DiscoveryWorld env worker; reduce to save CPU.
+train_data_size=16 # number of parallel tasks (matches other PPO examples)
+val_data_size=8
+# CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
-train_data_size=1 # number of parallel tasks (matches other PPO examples)
-val_data_size=1
-
-model_name=Qwen2.5-0.5B
+model_name=Qwen2.5-1.5B-Instruct
+num_gpus_per_node=2
 
 # Data preparation: only indicates modality (text) and data size.
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
-    --train_data_size 64 \
-    --val_data_size 64
+    --train_data_size $train_data_size \
+    --val_data_size $val_data_size
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gae \
@@ -33,16 +57,16 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=Qwen/$model_name \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=1 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=$num_gpus_per_node \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
@@ -50,15 +74,15 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
-    actor_rollout_ref.actor.invalid_action_penalty_coef=0.1 \
+    actor_rollout_ref.actor.invalid_action_penalty_coef=0.15 \
     critic.optim.lr=1e-5 \
     critic.model.use_remove_padding=True \
     critic.model.path=Qwen/$model_name \
     critic.model.enable_gradient_checkpointing=True \
-    critic.ppo_micro_batch_size_per_gpu=1 \
+    critic.ppo_micro_batch_size_per_gpu=2 \
     critic.model.fsdp_config.param_offload=False \
     critic.model.fsdp_config.optimizer_offload=False \
     algorithm.use_kl_in_reward=False \
@@ -72,9 +96,9 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console'] \
     trainer.project_name='verl_agent_discoveryworld' \
     trainer.experiment_name="ppo_${model_name}" \
-    trainer.n_gpus_per_node=1 \
+    trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq=1 \
     trainer.test_freq=5 \
-    trainer.total_epochs=50 \
+    trainer.total_epochs=5 \
     trainer.val_before_train=True "$@"
