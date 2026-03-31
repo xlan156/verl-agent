@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple, Optional
 import json
+from collections import Counter, defaultdict
 
 import numpy as np
 import ray
@@ -35,6 +36,9 @@ class DiscoveryWorldEnv:
         self._steps: int = 0
         self._prev_score: float = 0.0
         self._last_action_result: Optional[Dict[str, Any]] = None
+        
+        # reward shaping
+        self.init_reward_shaping()
 
     def _init_api(self) -> None:
 
@@ -50,6 +54,13 @@ class DiscoveryWorldEnv:
                 f"Failed to load DiscoveryWorld scenario='{self._scenario_name}' "
                 f"difficulty='{self._difficulty}'"
             )
+    
+    def init_reward_shaping(self):
+        self.action_history: List[Dict[str, Any]] = []
+        self.alpha = 2.0
+        self.beta = 0.8
+        self.action_counter = defaultdict(int)
+        self.object_seen = defaultdict(bool)
 
     def _score_normalized(self) -> float:
         assert self._api is not None
@@ -177,6 +188,7 @@ class DiscoveryWorldEnv:
         self._steps = 0
         self._prev_score = 0.0
         self._last_action_result = None
+        self.init_reward_shaping()
 
         text_obs, info = self._format_obs_and_info()
         self._prev_score = float(info.get("score_normalized", 0.0))
@@ -198,14 +210,32 @@ class DiscoveryWorldEnv:
 
         result = self._api.performAgentAction(agentIdx=0, actionJSON=action_json)
         self._last_action_result = result
+        self.action_history.append(action_json.get("action"))
         self._api.tick()
         self._steps += 1
 
-        # 新观测 & 奖励
+        # reward shaping
         text_obs, info = self._format_obs_and_info()
+        
+        # Bonus for encountering new objects
+        exploration_bonus = 0.0
+        accessible_objects = info.get("raw_observation").get("ui").get("accessibleEnvironmentObjects") # list
+        for obj in accessible_objects:
+            if self.object_seen[obj.get("uuid")] == False and obj.get("name") not in ["floor", "wall", "grass"]:
+                self.object_seen[obj.get("uuid")] = True
+                exploration_bonus += 0.05
+                
+        bonus_first_action = self.add_bonus_for_first_action(action_json.get("action", ""))
+        
+        # increment
         cur_score = float(info.get("score_normalized", 0.0))
-        reward = cur_score - self._prev_score
+        ingame_process_reward = cur_score - self._prev_score
         self._prev_score = cur_score
+        
+        # error penalty
+        penalty_for_error = self.penalize_error_action(result)
+        
+        reward = self.alpha * ingame_process_reward + self.beta * bonus_first_action + penalty_for_error + exploration_bonus
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
@@ -214,6 +244,19 @@ class DiscoveryWorldEnv:
 
     def close(self) -> None:
         return None
+    
+    def add_bonus_for_first_action(self, action_str: str) -> float:
+        """Return a small bonus reward for taking the first action, to encourage shorter solutions."""
+        if self.action_counter[action_str] == 0:
+            self.action_counter[action_str] += 1
+            return 0.1
+        return 0.0
+    
+    def penalize_error_action(self, result: Dict[str, Any]) -> float:
+        """Return a penalty if the last action resulted in an error, to encourage valid actions."""
+        if len(result.get("errors", [])) > 0:
+            return -0.1
+        return 0.0
 
 
 class DiscoveryWorldWorker:

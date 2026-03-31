@@ -65,24 +65,8 @@ def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     
 
 def discoveryworld_projection(actions: List[str]) -> Tuple[List[str], List[int]]:
-    """Parse model outputs into JSON action strings for DiscoveryWorld.
+    """
 
-    Expected model pattern (recommended but not strictly required):
-
-        <think> ... reasoning ... </think>
-        <action>{"action": ..., "arg1": ..., "arg2": ...}</action>
-
-    This function:
-      1. Extracts the first <action>...</action> block (case-insensitive).
-      2. Tries to parse its inner text as JSON. If parsing fails, marks as invalid
-         but still returns the *raw* inner text so the env can decide what to do.
-      3. Validity flag is additionally set to 0 if:
-      
-        No <think>...</think> is present, or
-
-    Returns:
-      - processed_actions: list of JSON strings or raw inner texts.
-      - valids: list[int], 1 for valid, 0 otherwise.
     """
 
     processed: List[str] = []

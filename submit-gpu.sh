@@ -2,9 +2,9 @@
 #SBATCH --partition=gpu_h100
 #SBATCH --job-name=agent_dis
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --gpus-per-node=2
-#SBATCH --time=01:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-node=1
+#SBATCH --time=10:00:00
 #SBATCH --output=job_log/%j/agent_dis_h100_output_%j.txt
 #SBATCH --error=job_log/%j/agent_dis_h100_error_%j.txt
 
@@ -18,6 +18,9 @@ source /sw/arch/RHEL8/EB_production/2023/software/Miniconda3/23.5.2-0/etc/profil
 
 conda activate verl-agent-dis
 
+export WANDB_KEY="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"
+wandb login $WANDB_KEY
+
 export HYDRA_FULL_ERROR=1
 unset ROCR_VISIBLE_DEVICES
 
@@ -29,13 +32,13 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
-num_cpus_per_env_worker=1 # CPU per DiscoveryWorld env worker; reduce to save CPU.
+num_cpus_per_env_worker=0.5 # CPU per DiscoveryWorld env worker; reduce to save CPU.
 train_data_size=16 # number of parallel tasks (matches other PPO examples)
-val_data_size=8
+val_data_size=4
 # CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
 model_name=Qwen2.5-1.5B-Instruct
-num_gpus_per_node=2
+num_gpus_per_node=1
 
 # Data preparation: only indicates modality (text) and data size.
 python3 -m examples.data_preprocess.prepare \
@@ -93,12 +96,12 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
-    trainer.logger=['console'] \
+    trainer.logger="['console','wandb']" \
     trainer.project_name='verl_agent_discoveryworld' \
-    trainer.experiment_name="ppo_${model_name}" \
+    trainer.experiment_name="ppo_${model_name}_exploration_reward" \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
-    trainer.save_freq=1 \
+    trainer.save_freq=100 \
     trainer.test_freq=5 \
-    trainer.total_epochs=5 \
+    trainer.total_epochs=100 \
     trainer.val_before_train=True "$@"

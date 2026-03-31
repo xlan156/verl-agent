@@ -656,7 +656,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             last_result = infos[i].get("last_action_result", {})
 
             ui_json = text_obs[i]
-            teleport_str = json.dumps(teleport_locs, indent=2, sort_keys=True)
+            teleport_str = "\n".join(f"{loc}" for loc, _ in teleport_locs.items())
             last_result_str = json.dumps(last_result, indent=2, sort_keys=True) if last_result else "{}"
 
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
