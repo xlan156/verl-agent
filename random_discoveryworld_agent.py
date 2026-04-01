@@ -138,6 +138,8 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
 
             print(f"Step {step_idx:02d} fakeLLM: {response}")
             observations, rewards, step_dones, infos = env_manager.step(text_actions)
+            
+            last_action_str = infos[0]
 
             for i in range(env_num):
                 dones[i] = bool(dones[i] or step_dones[i])

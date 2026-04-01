@@ -361,8 +361,36 @@ class TrajectoryCollector:
             batch = batch.union(batch_output)
             
             text_actions = self.tokenizer.batch_decode(batch.batch['responses'], skip_special_tokens=True)
-            
+
+            # Environment step
             next_obs, rewards, dones, infos = envs.step(text_actions)
+
+            # Optional per-step logging of prompt, LLM response, and processed env action
+            if self.config.trainer.get("log_eval_steps", False):
+                obs_texts = obs.get('text', None)
+                for i in range(batch_size):
+                    prompt_text = None
+                    if obs_texts is not None:
+                        try:
+                            prompt_text = obs_texts[i]
+                        except Exception:
+                            prompt_text = None
+
+                    # Best-effort fetch of processed action from infos
+                    info_i = infos[i] if i < len(infos) else {}
+                    env_action = info_i.get("projected_action")
+
+                    print("==== Eval Step {} Env {} ====".format(_step, i))
+                    if prompt_text is not None:
+                        print("[PROMPT]\n" + str(prompt_text))
+                    else:
+                        print("[PROMPT] <no text observation>")
+                    print("[RESPONSE]\n" + str(text_actions[i]))
+                    if env_action is not None:
+                        print("[PROJECTED_ACTION]\n" + str(env_action))
+                    else:
+                        print("[PROJECTED_ACTION] <not provided in infos>")
+                    print("==============================")
 
             
             if len(rewards.shape) == 2:

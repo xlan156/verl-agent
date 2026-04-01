@@ -28,8 +28,7 @@ _CODE_BLOCK_GENERIC_RE = re.compile(r"```(.*?)```", re.DOTALL)
 # 在本次 action 非法时用于回退，避免直接把垃圾字符串丢给环境。
 _ACTION_MEMORY: List[Optional[str]] = []
 
-# 安全的默认动作：简单向北移动一步
-_DEFAULT_SAFE_ACTION = json.dumps({"action": "MOVE_DIRECTION", "arg1": "north", "arg2": None}, separators=(",", ":"))
+_DEFAULT_SAFE_ACTION = json.dumps({"action": "MOVE_DIRECTION", "arg1": "east"}, separators=(",", ":"))
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:

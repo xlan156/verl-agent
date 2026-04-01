@@ -57,7 +57,7 @@ class DiscoveryWorldEnv:
     
     def init_reward_shaping(self):
         self.action_history: List[Dict[str, Any]] = []
-        self.alpha = 2.0
+        self.alpha = 1.5
         self.beta = 0.8
         self.action_counter = defaultdict(int)
         self.object_seen = defaultdict(bool)
@@ -208,6 +208,9 @@ class DiscoveryWorldEnv:
         else:
             raise ValueError(f"Unsupported action type: {type(action)}")
 
+        # Pre-check the structured action for obviously invalid arguments
+        invalid_arg_penalty = self._compute_invalid_action_penalty(action_json)
+
         result = self._api.performAgentAction(agentIdx=0, actionJSON=action_json)
         self._last_action_result = result
         self.action_history.append(action_json.get("action"))
@@ -235,7 +238,11 @@ class DiscoveryWorldEnv:
         # error penalty
         penalty_for_error = self.penalize_error_action(result)
         
-        reward = self.alpha * ingame_process_reward + self.beta * bonus_first_action + penalty_for_error + exploration_bonus
+        reward = (
+            self.alpha * ingame_process_reward
+            + penalty_for_error
+            + invalid_arg_penalty
+        )
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
@@ -256,6 +263,98 @@ class DiscoveryWorldEnv:
         """Return a penalty if the last action resulted in an error, to encourage valid actions."""
         if len(result.get("errors", [])) > 0:
             return -0.1
+        return 0.0
+
+    def _compute_invalid_action_penalty(self, action_json: Dict[str, Any]) -> float:
+        """Return an extra penalty when the agent uses invalid directions or UUIDs.
+
+        - MOVE_DIRECTION / ROTATE_DIRECTION must use one of {north, east, south, west}.
+        - For actions whose arguments are expected to be objects/agents, all arg* values
+          must be among the currently interactable object UUIDs.
+        """
+
+        if self._api is None:
+            return 0.0
+
+        if not isinstance(action_json, dict) or not action_json:
+            # Completely malformed or empty action
+            return -0.1
+
+        action_name = action_json.get("action", "")
+        if not action_name:
+            return -0.1
+
+        # Direction-only actions: check that the direction is valid
+        if action_name in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
+            direction = str(action_json.get("arg1", "")).lower()
+            if direction not in {"north", "south", "east", "west"}:
+                return -0.1
+            return 0.0
+
+        # Actions that do not take UUID/object arguments: skip UUID checks
+        if action_name in {"TELEPORT_TO_LOCATION", "DISCOVERY_FEED_GET_UPDATES", "DISCOVERY_FEED_GET_POST_BY_ID"}:
+            return 0.0
+
+        # Build the current set of interactable UUIDs from the UI observation
+        try:
+            observation = self._api.getAgentObservation(agentIdx=0) or {}
+            ui = observation.get("ui", {}) or {}
+        except Exception:
+            return 0.0
+
+        valid_uuids_inventory = set()
+        valid_uuids_accessible = set()
+
+        for key in "inventoryObjects":
+            for obj in ui.get(key, []) or []:
+                uuid = obj.get("uuid")
+                if uuid is not None:
+                    valid_uuids_inventory.add(str(uuid))
+        
+        for key in "accessibleEnvironmentObjects":
+            for obj in ui.get(key, []) or []:
+                uuid = obj.get("uuid")
+                if uuid is not None:
+                    valid_uuids_accessible.add(str(uuid))
+
+        valid_uuids_nearby = set()
+        nearby = ui.get("nearbyObjects", {}).get("objects", {}) or {}
+        for objects in nearby.values():
+            for obj in objects or []:
+                uuid = obj.get("uuid")
+                if uuid is not None:
+                    valid_uuids_nearby.add(str(uuid))
+
+        # Some actions (e.g., TALK) may use nearby agents as targets
+        valid_uuids_agents = set()
+        nearby_agents = ui.get("nearbyAgents", {}).get("list_of_agents", {}) or {}
+        for agent_info in nearby_agents.values():
+            if isinstance(agent_info, dict):
+                uuid = agent_info.get("uuid")
+                if uuid is not None:
+                    valid_uuids_agents.add(str(uuid))
+
+        # For all remaining actions, treat arg* fields as expected object/agent UUIDs.
+        # If any provided UUID is not in the interactable set, apply a penalty.
+        has_args = False
+        all_valid_uuids = valid_uuids_inventory | valid_uuids_accessible | valid_uuids_nearby | valid_uuids_agents
+        for key, value in action_json.items():
+            if not key.startswith("arg"):
+                continue
+            has_args = True
+            if value is None:
+                return -0.1
+            if str(value) not in all_valid_uuids:
+                return -0.1
+            if key == "arg1" and str(value) not in valid_uuids_inventory:
+                return -0.05
+            if key == "arg2" and str(value) not in valid_uuids_accessible:
+                return -0.05
+
+        # If an action that should reference objects has no args at all, penalize
+        if not has_args and action_name in {"PICKUP", "DROP", "PUT", "OPEN", "CLOSE", "ACTIVATE", "DEACTIVATE", "TALK", "EAT", "READ", "USE", "TELEPORT_TO_OBJECT"}:
+            return -0.1
+
         return 0.0
 
 

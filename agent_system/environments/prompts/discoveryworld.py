@@ -21,25 +21,23 @@ You are an expert autonomous agent operating in the DiscoveryWorld environment.
 Your task is:
 {task_description}
 
-Below is the current UI state of the world, from the agent's perspective:
+Below is the current UI state of the world from the agent's perspective, and every object is followed by its UUID in parentheses and agent's distance by tiles [dist=n]:
 {ui_json}
 
 You can issue actions in this environment by returning a JSON dictionary with keys like
-"action", "arg1", "arg2", etc.
+"action", "arg1", "arg2", etc. "arg1" should be an accessible object UUID or a valid argument for the action, and "arg2" should be an accessible object UUID if the action requires a second argument. The available actions and their usage are described below.
 
-The list of available actions and their arguments is:
-
-PICKUP(arg1: object): pick up an object.
-DROP(arg1: object): drop an object from inventory.
-PUT(arg1: object, arg2: target) : put object on/in another object, or give it to another agent.
-OPEN(arg1: object) : open a container/object.
-CLOSE(arg1: object) : close a container/object.
-ACTIVATE(arg1: object) : turn on / activate an object.
-DEACTIVATE(arg1: object) : turn off / deactivate an object.
-TALK(arg1: agent) : talk to another agent.
-EAT(arg1: object) : eat / consume an object.
-READ(arg1: object) : read an object (e.g., document, sign).
-USE(arg1: tool, arg2: target) : use a tool/object on a target object.
+PICKUP(arg1: object uuid): pick up an object.
+DROP(arg1: object uuid): drop an object from inventory.
+PUT(arg1: object uuid, arg2: target uuid) : put object on/in another object, or give it to another agent.
+OPEN(arg1: object uuid) : open a container/object.
+CLOSE(arg1: object uuid) : close a container/object.
+ACTIVATE(arg1: object uuid) : turn on / activate an object.
+DEACTIVATE(arg1: object uuid) : turn off / deactivate an object.
+TALK(arg1: target uuid) : talk to another agent.
+EAT(arg1: object uuid) : eat / consume an object.
+READ(arg1: object uuid) : read an object (e.g., document, sign).
+USE(arg1: tool uuid, arg2: target uuid) : use a tool/object on a target object. arg1 should be a uuid of an accessible tool, and arg2 should be a uuid of an object in the world.
 MOVE_DIRECTION(arg1: north|east|south|west) : move one step in the given direction.
 ROTATE_DIRECTION(arg1: north|east|south|west) : rotate to face the given direction.
 TELEPORT_TO_LOCATION(arg1: location_name) : teleport to a named location (see list of valid locations).
@@ -64,9 +62,15 @@ Now it's your turn to choose the next action.
    tags. Do not output natural language instructions or multiple actions.
 
 For example:
+with one argument
 
 <think> ... your reasoning here ... </think>
 <action>{{"action": "MOVE_DIRECTION", "arg1": "north"}}</action>
+
+or with two arguments
+
+<think> ... your reasoning here ... </think>
+<action>{{"action": "USE", "arg1": uuid, "arg2": uuid}}</action>
 """
 
 
@@ -81,24 +85,24 @@ So far you have taken a total of {step_count} step(s). Below are the most recent
 
 {action_history}
 
-You are now at step {current_step}. Below is the current UI state of the world, from
-the agent's perspective, as a JSON structure:
-```json
+You are now at step {current_step}.
+Below is the current UI state of the world from the agent's perspective, and every object is followed by its UUID in parentheses and agent's distance by tiles [dist=n]:
 {ui_json}
-```
 
-The list of available actions and their arguments is:
-PICKUP(arg1: object): pick up an object.
-DROP(arg1: object): drop an object from inventory.
-PUT(arg1: object, arg2: target) : put object on/in another object, or give it to another agent.
-OPEN(arg1: object) : open a container/object.
-CLOSE(arg1: object) : close a container/object.
-ACTIVATE(arg1: object) : turn on / activate an object.
-DEACTIVATE(arg1: object) : turn off / deactivate an object.
-TALK(arg1: agent) : talk to another agent.
-EAT(arg1: object) : eat / consume an object.
-READ(arg1: object) : read an object (e.g., document, sign).
-USE(arg1: tool, arg2: target) : use a tool/object on a target object.
+You can issue actions in this environment by returning a JSON dictionary with keys like
+"action", "arg1", "arg2", etc. "arg1" should be an accessible object UUID or a valid argument for the action, and "arg2" should be an accessible object UUID if the action requires a second argument. The available actions and their usage are described below.
+
+PICKUP(arg1: object uuid): pick up an object.
+DROP(arg1: object uuid): drop an object from inventory.
+PUT(arg1: object uuid, arg2: target uuid) : put object on/in another object, or give it to another agent.
+OPEN(arg1: object uuid) : open a container/object.
+CLOSE(arg1: object uuid) : close a container/object.
+ACTIVATE(arg1: object uuid) : turn on / activate an object.
+DEACTIVATE(arg1: object uuid) : turn off / deactivate an object.
+TALK(arg1: target uuid) : talk to another agent.
+EAT(arg1: object uuid) : eat / consume an object.
+READ(arg1: object uuid) : read an object (e.g., document, sign).
+USE(arg1: tool uuid, arg2: target uuid) : use a tool/object on a target object. arg1 should be a uuid of an accessible tool, and arg2 should be a uuid of an object in the world.
 MOVE_DIRECTION(arg1: north|east|south|west) : move one step in the given direction.
 ROTATE_DIRECTION(arg1: north|east|south|west) : rotate to face the given direction.
 TELEPORT_TO_LOCATION(arg1: location_name) : teleport to a named location (see list of valid locations).
@@ -127,6 +131,13 @@ Now it's your turn to choose the next action.
 
 For example:
 
+with one argument
+
 <think> ... your reasoning here ... </think>
-<action>{{"action": "USE", "arg1": 5, "arg2": 12}}</action>
+<action>{{"action": "MOVE_DIRECTION", "arg1": "north"}}</action>
+
+or with two arguments
+
+<think> ... your reasoning here ... </think>
+<action>{{"action": "USE", "arg1": uuid, "arg2": uuid}}</action>
 """

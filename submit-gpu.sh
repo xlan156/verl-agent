@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=1
-#SBATCH --time=10:00:00
+#SBATCH --time=4:00:00
 #SBATCH --output=job_log/%j/agent_dis_h100_output_%j.txt
 #SBATCH --error=job_log/%j/agent_dis_h100_error_%j.txt
 
@@ -32,8 +32,8 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
-num_cpus_per_env_worker=0.5 # CPU per DiscoveryWorld env worker; reduce to save CPU.
-train_data_size=16 # number of parallel tasks (matches other PPO examples)
+num_cpus_per_env_worker=0.2 # CPU per DiscoveryWorld env worker; reduce to save CPU.
+train_data_size=10 # number of parallel tasks (matches other PPO examples)
 val_data_size=4
 # CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
@@ -103,5 +103,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=100 \
     trainer.test_freq=5 \
-    trainer.total_epochs=100 \
+    trainer.total_epochs=30 \
     trainer.val_before_train=True "$@"

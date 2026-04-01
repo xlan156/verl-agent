@@ -630,6 +630,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         full_text_obs = self.build_text_obs(text_obs, infos, init=False)
 
         for i, info in enumerate(infos):
+            info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
