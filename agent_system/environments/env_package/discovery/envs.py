@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple, Optional
 import json
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 
 import numpy as np
 import ray
 
-from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import (  # type: ignore
+from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
 )
-from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.ScenarioMaker import (  # type: ignore
+from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.ScenarioMaker import(
     SCENARIOS,
     SCENARIO_DIFFICULTY_OPTIONS,
 )
@@ -37,6 +37,11 @@ class DiscoveryWorldEnv:
         self._prev_score: float = 0.0
         self._last_action_result: Optional[Dict[str, Any]] = None
         
+        self.recent_history = {
+            "observations": deque(maxlen=3),
+            "actions": deque(maxlen=3),
+            }
+        
         # reward shaping
         self.init_reward_shaping()
 
@@ -57,10 +62,38 @@ class DiscoveryWorldEnv:
     
     def init_reward_shaping(self):
         self.action_history: List[Dict[str, Any]] = []
-        self.alpha = 1.5
-        self.beta = 0.8
+        self.alpha = 10.0
+        self.beta = 1.0
         self.action_counter = defaultdict(int)
-        self.object_seen = defaultdict(bool)
+        self.object_seen = defaultdict(str)
+        self._object_name_counts = defaultdict(int)
+
+    def _record_object_seen(self, name: str, uuid: Any) -> None:
+        """Record an object by name with unique suffixes for duplicates."""
+        if not name:
+            return
+
+        name = str(name)
+        uuid_str = str(uuid)
+
+        if name not in self.object_seen:
+            self.object_seen[name] = uuid_str
+            self._object_name_counts[name] = 1
+            return
+
+        # Skip if this UUID is already recorded under any name variant
+        if uuid_str in self.object_seen.values():
+            return
+
+        base = name
+        count = self._object_name_counts.get(base, 1) + 1
+        key = f"{base}{count}"
+        while key in self.object_seen:
+            count += 1
+            key = f"{base}{count}"
+
+        self.object_seen[key] = uuid_str
+        self._object_name_counts[base] = count
 
     def _score_normalized(self) -> float:
         assert self._api is not None
@@ -89,6 +122,18 @@ class DiscoveryWorldEnv:
         info["won"] = bool(self._api.areTasksComplete())
         return text_obs, info
 
+    def _update_object_seen_from_ui(self, ui: Dict[str, Any]) -> None:
+        for obj in ui.get("inventoryObjects", []) or []:
+            if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+                self._record_object_seen(obj.get("name"), obj.get("uuid"))
+        for obj in ui.get("accessibleEnvironmentObjects", []) or []:
+            if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+                self._record_object_seen(obj.get("name"), obj.get("uuid"))
+        for direction, objects in ui.get("nearbyObjects", {}).get("objects", {}).items():
+            for obj in objects or []:
+                if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+                    self._record_object_seen(obj.get("name"), obj.get("uuid"))
+
     @staticmethod
     def compress_ui_observation(ui_obs: dict) -> str:
         """
@@ -112,16 +157,18 @@ class DiscoveryWorldEnv:
         # 2. Inventory (only if non-empty)
         inventory = ui_obs.get("inventoryObjects", [])
         if inventory:
-            items = [f"{obj.get('name', 'unknown')}[{obj.get('uuid', '?')}]" for obj in inventory]
+            items = [f"{obj.get('name', 'unknown')}" for obj in inventory if obj.get("name") not in ["floor", "wall", "grass", "path"]]
             lines.append(f"Inventory: {', '.join(items)}")
         else:
             lines.append("Inventory: empty")
         
         # 3. Accessible Objects
         accessible = ui_obs.get("accessibleEnvironmentObjects", [])
-        accessible_objects = [f"{obj.get('name', 'unknown')}[{obj.get('uuid', '?')}]" for obj in accessible]
+        accessible_objects = [f"{obj.get('name', 'unknown')}" for obj in accessible if obj.get("name") not in ["floor", "wall", "grass", "path"]]
         if accessible_objects:
             lines.append(f"Accessible: {', '.join(accessible_objects)}")
+        else:
+            lines.append("Accessible: no object is accessible in current location and facing direction")
         
         # 4. Nearby Objects (only interesting objects within certain steps, grouped by direction)
         nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
@@ -132,8 +179,8 @@ class DiscoveryWorldEnv:
             nearby_objects = []
             for obj in objects:
                 distance = obj.get("distance", 99)
-                if distance <= 2:
-                    nearby_objects.append(f"{obj.get('name', 'unknown')}[{obj.get('uuid', '?')}][dist={distance}]")
+                if distance <= 2 and obj.get("name") not in ["floor", "wall", "grass", "path"] and direction in ["north", "south", "east", "west"]:
+                    nearby_objects.append(f"{obj.get('name', 'unknown')} (distance={distance+1})")
             if nearby_objects:
                 nearby_summary[direction] = nearby_objects
         
@@ -191,6 +238,9 @@ class DiscoveryWorldEnv:
         self.init_reward_shaping()
 
         text_obs, info = self._format_obs_and_info()
+        ui = (info.get("raw_observation") or {}).get("ui", {})
+        self._update_object_seen_from_ui(ui)
+        info["object_seen"] = dict(self.object_seen)
         self._prev_score = float(info.get("score_normalized", 0.0))
         return text_obs, info
 
@@ -208,6 +258,14 @@ class DiscoveryWorldEnv:
         else:
             raise ValueError(f"Unsupported action type: {type(action)}")
 
+        # Metadata injected by the projection layer (see DiscoveryWorldEnvironmentManager.step).
+        # Use it for reward shaping, but strip before calling the underlying API.
+        meta = {}
+        if isinstance(action_json, dict):
+            meta = action_json.pop("__meta", {}) or {}
+        contain_think_block = int(meta.get("contain_think_block", 0)) if isinstance(meta, dict) else 0
+        are_json_format = int(meta.get("are_json_format", 0)) if isinstance(meta, dict) else 0
+
         # Pre-check the structured action for obviously invalid arguments
         invalid_arg_penalty = self._compute_invalid_action_penalty(action_json)
 
@@ -219,51 +277,57 @@ class DiscoveryWorldEnv:
 
         # reward shaping
         text_obs, info = self._format_obs_and_info()
+        info["contain_think_block"] = contain_think_block
+        info["are_json_format"] = are_json_format
         
         # Bonus for encountering new objects
-        exploration_bonus = 0.0
-        accessible_objects = info.get("raw_observation").get("ui").get("accessibleEnvironmentObjects") # list
-        for obj in accessible_objects:
-            if self.object_seen[obj.get("uuid")] == False and obj.get("name") not in ["floor", "wall", "grass"]:
-                self.object_seen[obj.get("uuid")] = True
-                exploration_bonus += 0.05
+        ui = (info.get("raw_observation") or {}).get("ui", {})
+        self._update_object_seen_from_ui(ui)
+        info["object_seen"] = dict(self.object_seen)
                 
-        bonus_first_action = self.add_bonus_for_first_action(action_json.get("action", ""))
+        bonus_exploring = self.add_bonus_for_exploring(action_json.get("action", ""), info)
         
         # increment
         cur_score = float(info.get("score_normalized", 0.0))
         ingame_process_reward = cur_score - self._prev_score
         self._prev_score = cur_score
         
+        # format reward
+        if contain_think_block and are_json_format:
+            format_reward = 1
+        else:            
+            format_reward = 0
+            
+        
         # error penalty
         penalty_for_error = self.penalize_error_action(result)
-        
-        reward = (
-            self.alpha * ingame_process_reward
-            + penalty_for_error
-            + invalid_arg_penalty
-        )
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
+        won_reward = 100.0 if info["won"] else 0.0
+        
+        reward = (
+            + 0.3 * penalty_for_error
+            + 0.2 * format_reward
+            + 0.5 * (ingame_process_reward + won_reward)
+        )
 
         return text_obs, reward, done, info
 
     def close(self) -> None:
         return None
     
-    def add_bonus_for_first_action(self, action_str: str) -> float:
+    def add_bonus_for_exploring(self, action_str: str, info: Dict[str, Any]) -> float:
         """Return a small bonus reward for taking the first action, to encourage shorter solutions."""
-        if self.action_counter[action_str] == 0:
-            self.action_counter[action_str] += 1
+        if self._steps <= 10 and action_str in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
             return 0.1
         return 0.0
     
     def penalize_error_action(self, result: Dict[str, Any]) -> float:
         """Return a penalty if the last action resulted in an error, to encourage valid actions."""
         if len(result.get("errors", [])) > 0:
-            return -0.1
-        return 0.0
+            return 0
+        return 1
 
     def _compute_invalid_action_penalty(self, action_json: Dict[str, Any]) -> float:
         """Return an extra penalty when the agent uses invalid directions or UUIDs.
@@ -278,17 +342,17 @@ class DiscoveryWorldEnv:
 
         if not isinstance(action_json, dict) or not action_json:
             # Completely malformed or empty action
-            return -0.1
+            return -0.05
 
         action_name = action_json.get("action", "")
         if not action_name:
-            return -0.1
+            return -0.05
 
         # Direction-only actions: check that the direction is valid
         if action_name in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
             direction = str(action_json.get("arg1", "")).lower()
             if direction not in {"north", "south", "east", "west"}:
-                return -0.1
+                return -0.05
             return 0.0
 
         # Actions that do not take UUID/object arguments: skip UUID checks
@@ -305,17 +369,15 @@ class DiscoveryWorldEnv:
         valid_uuids_inventory = set()
         valid_uuids_accessible = set()
 
-        for key in "inventoryObjects":
-            for obj in ui.get(key, []) or []:
-                uuid = obj.get("uuid")
-                if uuid is not None:
-                    valid_uuids_inventory.add(str(uuid))
-        
-        for key in "accessibleEnvironmentObjects":
-            for obj in ui.get(key, []) or []:
-                uuid = obj.get("uuid")
-                if uuid is not None:
-                    valid_uuids_accessible.add(str(uuid))
+        for obj in ui.get("inventoryObjects", []) or []:
+            uuid = obj.get("uuid")
+            if uuid is not None:
+                valid_uuids_inventory.add(str(uuid))
+    
+        for obj in ui.get("accessibleEnvironmentObjects", []) or []:
+            uuid = obj.get("uuid")
+            if uuid is not None:
+                valid_uuids_accessible.add(str(uuid))
 
         valid_uuids_nearby = set()
         nearby = ui.get("nearbyObjects", {}).get("objects", {}) or {}
@@ -343,9 +405,9 @@ class DiscoveryWorldEnv:
                 continue
             has_args = True
             if value is None:
-                return -0.1
+                return -0.05
             if str(value) not in all_valid_uuids:
-                return -0.1
+                return -0.05
             if key == "arg1" and str(value) not in valid_uuids_inventory:
                 return -0.05
             if key == "arg2" and str(value) not in valid_uuids_accessible:
@@ -353,9 +415,10 @@ class DiscoveryWorldEnv:
 
         # If an action that should reference objects has no args at all, penalize
         if not has_args and action_name in {"PICKUP", "DROP", "PUT", "OPEN", "CLOSE", "ACTIVATE", "DEACTIVATE", "TALK", "EAT", "READ", "USE", "TELEPORT_TO_OBJECT"}:
-            return -0.1
+            return -0.05
 
         return 0.0
+        
 
 
 class DiscoveryWorldWorker:

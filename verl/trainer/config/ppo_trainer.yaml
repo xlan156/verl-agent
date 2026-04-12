@@ -287,6 +287,11 @@ trainer:
   # When True, TrajectoryCollector will log prompt & LLM response at each environment step.
   # Intended mainly for evaluation (validation) runs.
   log_eval_steps: False
+  # When True, log per-environment-step prompt/LLM output as a wandb.Table.
+  # (Requires wandb enabled in trainer.logger.)
+  log_llm_steps: False
+  # Truncate stored prompt/output strings to last N chars (0 disables truncation).
+  log_llm_steps_max_chars: 8000
 
 ray_init:
   num_cpus: null # `None` means using all CPUs, which might cause hang if limited in systems like SLURM. Please set to a number allowed then.

@@ -73,36 +73,44 @@ def sample_random_action(info: Dict[str, Any]) -> Dict[str, Any]:
 
 def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     """Simulate an LLM response: sometimes valid, sometimes malformed."""
-    p = random.random()
+    string_candidates = [
+        "OPEN_JAR",
+        "I choose to pick up the key",
+        "Use the substance A on the jar",
+        "move to the east",
+        "USE_SUBSTANCE ON JAR",
+        'USE("jar", "Substance A")',
+    ]
+    action_json_str = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"})
+    
+    string_candidates = [f"<think> This step is .... </think><action>{action_json_str}</action> "]
+    out = random.choice(string_candidates)
+    return out
 
-    # 60%: 完全合法的 <think>/<action> 包装
-    if p < 0.6:
-        act = sample_random_action(info)
-        act_json = json.dumps(act)
-        return f"<think>I will try a reasonable action.</think><action>{act_json}</action>"
 
-    # 20%: 有 JSON 但 action 字段缺失或错误
-    if p < 0.8:
-        bad = sample_random_action(info)
-        # 删除 action 字段或改成非法动作
-        if random.random() < 0.5:
-            bad.pop("action", None)
-        else:
-            bad["action"] = "JUMP_OVER_WALL"
-        act_json = json.dumps(bad)
-        return f"<think>Trying something odd.</think><action>{act_json}</action>"
+def build_natural_response(info: Dict[str, Any]) -> str:
+    """Generate natural language that mentions directions or object names."""
+    object_seen = info.get("object_seen") or {}
+    names = [str(name) for name in object_seen.keys() if name]
 
-    # 10%: JSON 包在 ```json``` 代码块里，外面有说明文字
-    if p < 0.9:
-        act = sample_random_action(info)
-        act_json = json.dumps(act, indent=2)
-        return (
-            "Here is my action in JSON:\n"  # projection 应该能从代码块中挖出 JSON
-            "```json\n" + act_json + "\n```"
-        )
+    directions = ["north", "south", "east", "west"]
+    templates = [
+        "move {direction}",
+        "rotate {direction}",
+        "go {direction}",
+        "turn to the {direction}",
+        "pick up the {obj}",
+        "open the {obj}",
+        "use the {obj} on the {obj2}",
+        "put the {obj} in the {obj2}",
+    ]
 
-    # 10%: 完全乱写、带中文，应该被判 invalid，并触发 projection 里的回退逻辑
-    return "我觉得向左走两步，然后随便看看。"
+    template = random.choice(templates)
+    direction = random.choice(directions)
+    obj = random.choice(names) if names else "thing"
+    obj2 = random.choice(names) if len(names) > 1 else obj
+
+    return template.format(direction=direction, obj=obj, obj2=obj2)
 
 
 def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
@@ -138,8 +146,10 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
 
             print(f"Step {step_idx:02d} fakeLLM: {response}")
             observations, rewards, step_dones, infos = env_manager.step(text_actions)
-            
-            last_action_str = infos[0]
+            print(
+                f"Step {step_idx:02d} projected: {infos[0].get('projected_action')} "
+                f"valid={infos[0].get('is_action_valid')}"
+            )
 
             for i in range(env_num):
                 dones[i] = bool(dones[i] or step_dones[i])

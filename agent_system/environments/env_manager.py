@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from typing import List, Tuple, Dict, Union, Any
+import json
 from collections import defaultdict
 from functools import partial
 import os
@@ -531,17 +532,19 @@ class AppWorldEnvironmentManager(EnvironmentManagerBase):
         self.memory.reset(batch_size = len(text_obs))
         self.tasks = text_obs.copy()
         self.pre_text_obs = text_obs
+        self.last_infos = infos
 
         full_text_obs = self.build_text_obs(text_obs, init=True)
         return {'text': full_text_obs, 'image': None, 'anchor': text_obs}, infos
     
     def step(self, text_actions: List[str]):
-        actions, valids = self.projection_f(text_actions)
+        actions, valids = self.projection_f(text_actions, self.last_infos)
 
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
         self.memory.store({'text_obs': text_obs, 'action': actions})
         self.pre_text_obs = text_obs
+        self.last_infos = infos
 
         full_text_obs = self.build_text_obs(text_obs)
 
@@ -615,23 +618,54 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.memory.reset(batch_size=len(text_obs))
         self.tasks = [info.get("task_description", "") for info in infos]
         self.pre_text_obs = text_obs
+        self.last_infos = infos
 
         full_text_obs = self.build_text_obs(text_obs, infos, init=True)
         return {"text": full_text_obs, "image": None, "anchor": text_obs}, infos
 
     def step(self, text_actions: List[str]):
-        actions, valids = self.projection_f(text_actions)
+        # Projection uses the *previous-step* infos to parse/validate the raw LLM output.
+        # Some projections may write debugging metadata into these infos (e.g., whether the
+        # model output contained a <think> block or whether it was JSON-formatted). Since
+        # env.step() returns a fresh infos list, we snapshot those flags here and propagate
+        # them into the returned infos for downstream reward/logging.
+        prev_infos = self.last_infos or []
+        actions, valids = self.projection_f(text_actions, prev_infos)
+
+        contain_think_block = [int(info.get("contain_think_block", 0)) for info in prev_infos]
+        are_json_format = [int(info.get("are_json_format", 0)) for info in prev_infos]
+
+        # Pack projection metadata into the action JSON so the underlying env (envs.py)
+        # can shape rewards based on model formatting behavior.
+        # The env is expected to strip __meta before calling the real environment API.
+        for i in range(len(actions)):
+            try:
+                act_obj = json.loads(actions[i]) if isinstance(actions[i], str) else None
+                if isinstance(act_obj, dict):
+                    act_obj["__meta"] = {
+                        "contain_think_block": contain_think_block[i] if i < len(contain_think_block) else 0,
+                        "are_json_format": are_json_format[i] if i < len(are_json_format) else 0,
+                    }
+                    actions[i] = json.dumps(act_obj, separators=(",", ":"))
+            except Exception:
+                # Best-effort: if action isn't JSON, leave it unchanged.
+                pass
 
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
         self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
         self.pre_text_obs = text_obs
+        self.last_infos = infos
 
         full_text_obs = self.build_text_obs(text_obs, infos, init=False)
 
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
+            if i < len(contain_think_block):
+                info["contain_think_block"] = contain_think_block[i]
+            if i < len(are_json_format):
+                info["are_json_format"] = are_json_format[i]
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)

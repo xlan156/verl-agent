@@ -133,4 +133,9 @@ data/
 *ports
 job_log/
 video/
+sft/
+!sft/SFTtrain.py
+Qwen2.5-1.5B-Instruct/
+qwen_apikey.txt
+
 

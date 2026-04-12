@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+from typing import Any, Optional
+
 import torch
 import numpy as np
 from verl import DataProto
@@ -287,6 +290,7 @@ class TrajectoryCollector:
             gen_batch: DataProto, 
             actor_rollout_wg, 
             envs: EnvironmentManagerBase,
+            llm_step_rows: Optional[list[dict[str, Any]]] = None,
             ) -> DataProto:
         """
         Collects trajectories through parallel agent-environment agent_loop.
@@ -365,32 +369,47 @@ class TrajectoryCollector:
             # Environment step
             next_obs, rewards, dones, infos = envs.step(text_actions)
 
-            # Optional per-step logging of prompt, LLM response, and processed env action
-            if self.config.trainer.get("log_eval_steps", False):
+            # Optional per-step collection of prompt/LLM output for later logging (e.g., to wandb)
+            if llm_step_rows is not None:
                 obs_texts = obs.get('text', None)
+                max_chars = int(self.config.trainer.get("log_llm_steps_max_chars", 8000))
+
+                def _truncate(txt: Optional[str]) -> str:
+                    if txt is None:
+                        return ""
+                    if max_chars > 0 and len(txt) > max_chars:
+                        return "... " + txt[-max_chars:]
+                    return txt
+
+                # Normalize shapes
+                _rewards = rewards
+                _dones = dones
+                if isinstance(_rewards, np.ndarray) and len(_rewards.shape) == 2:
+                    _rewards = _rewards.squeeze(1)
+                if isinstance(_dones, np.ndarray) and len(_dones.shape) == 2:
+                    _dones = _dones.squeeze(1)
+
                 for i in range(batch_size):
+                    info_i: Dict[str, Any] = infos[i] if i < len(infos) else {}
                     prompt_text = None
-                    if obs_texts is not None:
-                        try:
-                            prompt_text = obs_texts[i]
-                        except Exception:
-                            prompt_text = None
+                    if obs_texts is not None and i < len(obs_texts):
+                        prompt_text = obs_texts[i]
 
-                    # Best-effort fetch of processed action from infos
-                    info_i = infos[i] if i < len(infos) else {}
-                    env_action = info_i.get("projected_action")
-
-                    print("==== Eval Step {} Env {} ====".format(_step, i))
-                    if prompt_text is not None:
-                        print("[PROMPT]\n" + str(prompt_text))
-                    else:
-                        print("[PROMPT] <no text observation>")
-                    print("[RESPONSE]\n" + str(text_actions[i]))
-                    if env_action is not None:
-                        print("[PROJECTED_ACTION]\n" + str(env_action))
-                    else:
-                        print("[PROJECTED_ACTION] <not provided in infos>")
-                    print("==============================")
+                    row = {
+                        "rollout_step": int(_step),
+                        "env_index": int(i),
+                        "uid": str(uid_batch[i]) if i < len(uid_batch) else "",
+                        "traj_uid": str(traj_uid[i]) if i < len(traj_uid) else "",
+                        "active": bool(active_masks[i]) if i < len(active_masks) else True,
+                        "reward": float(_rewards[i]) if i < len(_rewards) else None,
+                        "done": bool(_dones[i]) if i < len(_dones) else False,
+                        "prompt": _truncate(prompt_text if prompt_text is None else str(prompt_text)),
+                        "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
+                        "projected_action": str(info_i.get("projected_action", "")),
+                        "is_action_valid": bool(info_i.get("is_action_valid", True)),
+                        "info_json": _truncate(json.dumps(info_i, ensure_ascii=False, default=str)),
+                    }
+                    llm_step_rows.append(row)
 
             
             if len(rewards.shape) == 2:
@@ -446,6 +465,7 @@ class TrajectoryCollector:
             gen_batch: DataProto, 
             actor_rollout_wg, 
             envs: EnvironmentManagerBase,
+            llm_step_rows: Optional[list[dict[str, Any]]] = None,
             ) -> DataProto:
         """
         Conduct dynamic rollouts until a target batch size is met. 
@@ -483,6 +503,7 @@ class TrajectoryCollector:
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
+                llm_step_rows=llm_step_rows,
             )
             batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = filter_group_data(batch_list=batch_list, 
                                                                                                 episode_rewards=episode_rewards, 
@@ -515,6 +536,7 @@ class TrajectoryCollector:
             actor_rollout_wg, 
             envs: EnvironmentManagerBase,
             is_train: bool = True,
+            wandb_step: Optional[int] = None,
             ) -> DataProto:
         """
         Select and run the appropriate rollout loop (dynamic or vanilla).
@@ -528,6 +550,10 @@ class TrajectoryCollector:
         Returns:
             DataProto: Final collected trajectory data with metadata.
         """
+        # Optional collection of per-step (prompt, LLM output, projected action, etc.)
+        log_llm_steps = bool(self.config.trainer.get("log_llm_steps", False))
+        llm_step_rows: Optional[list[dict[str, Any]]] = [] if log_llm_steps else None
+
         if is_train:
             gen_batch = gen_batch.repeat(repeat_times=self.config.env.rollout.n, interleave=True)
             
@@ -539,6 +565,7 @@ class TrajectoryCollector:
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
+                llm_step_rows=llm_step_rows,
             )
         else:
             # Vanilla Sampling   
@@ -547,6 +574,7 @@ class TrajectoryCollector:
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
+                llm_step_rows=llm_step_rows,
             )
         assert len(total_batch_list) == len(total_episode_rewards)
         assert len(total_batch_list) == len(total_episode_lengths)
@@ -563,5 +591,49 @@ class TrajectoryCollector:
             traj_uid=total_traj_uid,
             tool_callings=totoal_tool_callings,
         )
+
+        # Emit collected rows to wandb as a single table per trainer step.
+        if llm_step_rows is not None and wandb_step is not None and len(llm_step_rows) > 0:
+            try:
+                import wandb
+
+                if getattr(wandb, "run", None) is not None:
+                    table_key = "rollout/llm_steps" if is_train else "eval/llm_steps"
+                    columns = [
+                        "global_step",
+                        "rollout_step",
+                        "env_index",
+                        "uid",
+                        "traj_uid",
+                        "active",
+                        "reward",
+                        "done",
+                        "prompt",
+                        "llm_output",
+                        "projected_action",
+                        "is_action_valid",
+                        "info_json",
+                    ]
+                    table = wandb.Table(columns=columns)
+                    for r in llm_step_rows:
+                        table.add_data(
+                            int(wandb_step),
+                            r.get("rollout_step"),
+                            r.get("env_index"),
+                            r.get("uid"),
+                            r.get("traj_uid"),
+                            r.get("active"),
+                            r.get("reward"),
+                            r.get("done"),
+                            r.get("prompt"),
+                            r.get("llm_output"),
+                            r.get("projected_action"),
+                            r.get("is_action_valid"),
+                            r.get("info_json"),
+                        )
+                    wandb.log({table_key: table}, step=int(wandb_step))
+            except Exception:
+                # Best-effort logging: never break training/eval if wandb logging fails.
+                pass
         
         return gen_batch_output
