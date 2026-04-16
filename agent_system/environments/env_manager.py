@@ -26,6 +26,7 @@ from omegaconf import OmegaConf
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
+from agent_system.environments.env_package.discovery.actions import all_plausible_action_mapper
 
 
 def parse_gamefile(infos):
@@ -633,7 +634,11 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         actions, valids = self.projection_f(text_actions, prev_infos)
 
         contain_think_block = [int(info.get("contain_think_block", 0)) for info in prev_infos]
+        contain_action_block = [int(info.get("contain_action_block", 0)) for info in prev_infos]
         are_json_format = [int(info.get("are_json_format", 0)) for info in prev_infos]
+        think_has_chinese = [int(info.get("think_has_chinese", 0)) for info in prev_infos]
+        action_multiple_actions = [int(info.get("action_multiple_actions", 0)) for info in prev_infos]
+        is_valid = [int(info.get("is_valid", 0)) for info in prev_infos]
 
         # Pack projection metadata into the action JSON so the underlying env (envs.py)
         # can shape rewards based on model formatting behavior.
@@ -644,7 +649,11 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 if isinstance(act_obj, dict):
                     act_obj["__meta"] = {
                         "contain_think_block": contain_think_block[i] if i < len(contain_think_block) else 0,
+                        "contain_action_block": contain_action_block[i] if i < len(contain_action_block) else 0,
                         "are_json_format": are_json_format[i] if i < len(are_json_format) else 0,
+                        "think_has_chinese": think_has_chinese[i] if i < len(think_has_chinese) else 0,
+                        "action_multiple_actions": action_multiple_actions[i] if i < len(action_multiple_actions) else 0,
+                        "is_valid": is_valid[i] if i < len(is_valid) else 0,
                     }
                     actions[i] = json.dumps(act_obj, separators=(",", ":"))
             except Exception:
@@ -664,8 +673,16 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             info["is_action_valid"] = to_numpy(valids[i])
             if i < len(contain_think_block):
                 info["contain_think_block"] = contain_think_block[i]
+            if i < len(contain_action_block):
+                info["contain_action_block"] = contain_action_block[i]
             if i < len(are_json_format):
                 info["are_json_format"] = are_json_format[i]
+            if i < len(think_has_chinese):
+                info["think_has_chinese"] = think_has_chinese[i]
+            if i < len(action_multiple_actions):
+                info["action_multiple_actions"] = action_multiple_actions[i]
+            if i < len(is_valid):
+                info["is_valid"] = is_valid[i]
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)
@@ -689,6 +706,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             task_desc = infos[i].get("task_description", "")
             teleport_locs = infos[i].get("teleport_locations", {})
             last_result = infos[i].get("last_action_result", {})
+            filtered_actions = self.filter_plausible_actions(infos[i])
+            filtered_actions = "\n".join(f"{a}" for a in filtered_actions)
 
             ui_json = text_obs[i]
             teleport_str = "\n".join(f"{loc}" for loc, _ in teleport_locs.items())
@@ -698,6 +717,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     task_description=task_desc,
                     ui_json=ui_json,
+                    #action_options=filtered_actions,
                     teleport_locations=teleport_str,
                     last_action_result=last_result_str,
                 )
@@ -712,6 +732,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                     action_history=history_block,
                     current_step=len(self.memory[i]) + 1,
                     ui_json=ui_json,
+                    #action_options=filtered_actions,
                     teleport_locations=teleport_str,
                     last_action_result=last_result_str,
                 )
@@ -719,6 +740,23 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             postprocess_text_obs.append(obs)
 
         return postprocess_text_obs
+    
+    def filter_plausible_actions(self, info):
+        raw_observations = info.get("raw_observation").get("ui")
+
+        filtered_actions = []
+
+        accessible_objects = raw_observations.get("accessibleEnvironmentObjects")
+        directions_can_move = raw_observations.get("agentLocation").get("directions_you_can_move")
+        for action_text, action_json in all_plausible_action_mapper.items():
+            if accessible_objects is not None:
+                for obj in accessible_objects:
+                    if str(obj.get("uuid")) in json.dumps(action_json):
+                        filtered_actions.append(action_text)
+            for direction in directions_can_move:
+                if direction in json.dumps(action_json) or "rotate" in action_text.lower():
+                    filtered_actions.append(action_text)
+        return list(set(filtered_actions))
 
 
 def make_envs(config):
@@ -828,12 +866,18 @@ def make_envs(config):
         discovery_cfg = getattr(config.env, "discoveryworld", None)
         scenario_name = getattr(discovery_cfg, "scenario_name", None)
         difficulty = getattr(discovery_cfg, "difficulty", None)
+        save_frames = getattr(discovery_cfg, "save_frames", None)
+        frames_dir = getattr(discovery_cfg, "frames_dir", None)
 
         env_kwargs = {
             "scenario_name": scenario_name,
             "difficulty": difficulty,
             "max_steps": config.env.max_steps,
         }
+        if save_frames is not None:
+            env_kwargs["save_frames"] = bool(save_frames)
+        if frames_dir:
+            env_kwargs["frames_dir"] = frames_dir
 
         _envs = build_discoveryworld_envs(
             seed=config.env.seed,

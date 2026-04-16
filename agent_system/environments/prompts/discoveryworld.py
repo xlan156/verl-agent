@@ -24,18 +24,16 @@ Your task is:
 Below is the current state of the world from the agent's perspective:
 {ui_json}
 
-You can now take your action using the following JSON format:
-{{"action": action_name, "arg1": item, "arg2": item}}
-
-NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, DROP, PUT, OPEN, CLOSE, ACTIVATE, DEACTIVATE, TALK, EAT, READ, USE. Action USE and PUT needs two arguments, others only need one.
+NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
 NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
 NOTE: Only accessible objects can be interacted with (pickup, use, put, etc.). If there is no accessible object, you can only move or rotate.
 
-Now it's your turn to choose the next action.
+You can now take your action using the following JSON format:
+{{"action": action_name, "arg1": item, "arg2": item}}
 
 1. First, think step by step about the current state, task, and which action will be required to reach some intermediate goals and then final goal. This reasoning MUST be enclosed within <think> </think> tags.
    
-2. After finishing your reasoning, output a single action inside <action> </action>
+2. After finishing your reasoning, output a single action {{"action": action_name, "arg1": item, "arg2": item}} inside <action> </action>
    tags. Do not output multiple actions.
 """
 
@@ -55,17 +53,16 @@ So far you have taken a total of {step_count} step(s). Below are the most recent
 
 {action_history}
 
-You can now take your action using the following JSON format:
-{{"action": action_name, "arg1": item, "arg2": item}}
-
-NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, DROP, PUT, OPEN, CLOSE, ACTIVATE, DEACTIVATE, TALK, EAT, READ, USE. Action USE and PUT needs two arguments, others only need one.
+NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
 NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
 NOTE: Only accessible objects can be interacted with (pickup, use, put, etc.). If there is no accessible object, you can only move or rotate.
 
-Now it's your turn to choose the next action.
+You can now take your action using the following JSON format:
+{{"action": action_name, "arg1": item, "arg2": item}}
 
 1. First, think step by step about the current state, task, and which action will be required to reach some intermediate goals and then final goal. This reasoning MUST be enclosed within <think> </think> tags.
    
-2. After finishing your reasoning, output a single action inside <action> </action>
+2. After finishing your reasoning, output a single action {{"action": action_name, "arg1": item, "arg2": item}} inside <action> </action>
    tags. Do not output multiple actions.
+
 """

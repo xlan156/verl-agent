@@ -17,68 +17,100 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import DiscoveryWorldAPI
+from agent_system.environments.env_package.discovery.actions import all_plausible_action_mapper
 
 AVAILABLE_ACTIONS = DiscoveryWorldAPI.listKnownActionsStatic()
 
-# 用于解析 LLM 输出中的代码块
-_CODE_BLOCK_JSON_RE = re.compile(r"```json(.*?)```", re.DOTALL | re.IGNORECASE)
-_CODE_BLOCK_GENERIC_RE = re.compile(r"```(.*?)```", re.DOTALL)
+# Regex helpers
+JSON_RE = re.compile(r"```json(.*?)```", re.DOTALL | re.IGNORECASE)
+GENERIC_RE = re.compile(r"```(.*?)```", re.DOTALL)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+_OBJECT_ACTION_PATTERNS = [
+    (re.compile(r"\bwash\b|\brinse\b|\bclean\b", re.IGNORECASE), "USE"),
+    (re.compile(r"\bpick(?:\s+up)?\b|\btake\b", re.IGNORECASE), "PICKUP"),
+    (re.compile(r"\bopen\b", re.IGNORECASE), "OPEN"),
+    (re.compile(r"\buse\b", re.IGNORECASE), "USE"),
+    (re.compile(r"\bput\b|\bplace\b", re.IGNORECASE), "PUT"),
+    (re.compile(r"\bmove\b|\bgo\b|\bwalk\b|\bstep\b", re.IGNORECASE), "MOVE_DIRECTION"),
+    (re.compile(r"\brotate\b|\bturn\b|\bface\b", re.IGNORECASE), "ROTATE_DIRECTION"),
+]
 
 _DEFAULT_SAFE_ACTION = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"}, separators=(",", ":"))
 
+
+def _normalize_action_choice(text: str) -> str:
+    """Normalize an action choice emitted by the model.
+
+    Handles small formatting variations like bullets/numbering and quotes.
+    """
+    s = (text or "").strip()
+    # Strip leading bullets / numbering.
+    s = re.sub(r"^\s*(?:[-*]|\d+[\.)])\s+", "", s)
+    s = s.strip().strip('"').strip("'").strip()
+    return s
+
+_MOVE_ROTATE_ACTIONS = {"MOVE_DIRECTION", "ROTATE_DIRECTION"}
 _DIRECTIONS = {"north", "south", "east", "west"}
-
-_OBJECT_ACTION_PATTERNS = [
-    (re.compile(r"\bpick(?:\s+up)?\b|\btake\b", re.IGNORECASE), "PICKUP"),
-    (re.compile(r"\bdrop\b|\brelease\b", re.IGNORECASE), "DROP"),
-    (re.compile(r"\bopen\b", re.IGNORECASE), "OPEN"),
-    (re.compile(r"\bclose\b|\bshut\b", re.IGNORECASE), "CLOSE"),
-    (re.compile(r"\bactivate\b|\bturn\s+on\b", re.IGNORECASE), "ACTIVATE"),
-    (re.compile(r"\bdeactivate\b|\bturn\s+off\b", re.IGNORECASE), "DEACTIVATE"),
-    (re.compile(r"\beat\b|\bconsume\b", re.IGNORECASE), "EAT"),
-    (re.compile(r"\bread\b", re.IGNORECASE), "READ"),
-    (re.compile(r"\buse\b", re.IGNORECASE), "USE"),
-    (re.compile(r"\btalk\b|\bspeak\b", re.IGNORECASE), "TALK"),
-]
-
-_SINGLE_OBJECT_ACTIONS = {
-    "PICKUP",
-    "DROP",
-    "OPEN",
-    "CLOSE",
-    "ACTIVATE",
-    "DEACTIVATE",
-    "EAT",
-    "READ",
-    "TALK",
-    "TELEPORT_TO_OBJECT",
-}
-
+_SINGLE_OBJECT_ACTIONS = {"PICKUP", "OPEN"}
 _DOUBLE_OBJECT_ACTIONS = {"USE", "PUT"}
 
 
-def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Robustly extract a JSON object from LLM output.
+def _contains_cjk(text: str) -> bool:
+    return bool(text and _CJK_RE.search(text))
 
-    Priority:
-      1) Last ```json ... ``` block.
-      2) Else last ``` ... ``` block.
-      3) Else whole text.
-    Returns parsed dict or None.
+
+def _count_top_level_json_objects(text: str) -> int:
+    """Count complete top-level {...} JSON objects in text.
+
+    This is a lightweight heuristic used to detect when the model emitted multiple
+    JSON action objects inside a single <action>...</action> block.
     """
+    if not text:
+        return 0
+
+    depth = 0
+    in_str = False
+    escape = False
+    count = 0
+
+    for ch in text:
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    count += 1
+
+    return count
+
+
+def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+
     candidate: Optional[str] = None
 
-    # 1) ```json ... ```
-    matches = _CODE_BLOCK_JSON_RE.findall(text)
+    matches = JSON_RE.findall(text)
     if matches:
         candidate = matches[-1].strip()
     else:
-        # 2) 任意 ``` ... ```
-        matches = _CODE_BLOCK_GENERIC_RE.findall(text)
+        matches = GENERIC_RE.findall(text)
         if matches:
             candidate = matches[-1].strip()
 
-    # 3) 没有代码块，就用原文
     if candidate is None:
         candidate = text.strip()
 
@@ -128,11 +160,21 @@ def _extract_direction(text: str) -> Optional[str]:
 
 
 def _infer_move_or_rotate(text: str) -> Optional[Dict[str, Any]]:
-    direction = _extract_direction(text)
+    text_l = (text or "").lower()
+    direction = _extract_direction(text_l)
     if not direction:
         return None
 
-    text_l = text.lower()
+    # Prefer explicit action-name style outputs like:
+    #   MOVE_DIRECTION,west
+    #   ROTATE_DIRECTION east
+    #   move_direction , west
+    if re.search(r"\brotate_direction\b|\brotate\s+direction\b", text_l):
+        return {"action": "ROTATE_DIRECTION", "arg1": direction}
+    if re.search(r"\bmove_direction\b|\bmove\s+direction\b", text_l):
+        return {"action": "MOVE_DIRECTION", "arg1": direction}
+
+    # Fallback: natural language phrasing.
     if re.search(r"\brotate\b|\bturn\b|\bface\b", text_l):
         return {"action": "ROTATE_DIRECTION", "arg1": direction}
     if re.search(r"\bmove\b|\bgo\b|\bwalk\b|\bstep\b", text_l):
@@ -238,161 +280,293 @@ def _prefer_jar_as_arg2(
             action["arg1"] = other_uuid
 
     return action
-    
+
+
+def _build_object_seen_list(
+    infos: Optional[List[Dict[str, Any]]],
+    actions: List[str],
+) -> List[Dict[str, str]]:
+    if not infos:
+        return [{} for _ in actions]
+
+    object_seen_list: List[Dict[str, str]] = []
+    for info in infos:
+        seen = info.get("object_seen") or {}
+        if isinstance(seen, dict):
+            object_seen_list.append({str(k): str(v) for k, v in seen.items()})
+        else:
+            object_seen_list.append({})
+    return object_seen_list
+
+
+def _extract_detection_flags(
+    action_text: str,
+    re_action_block: re.Pattern,
+) -> Tuple[int, int, int, int]:
+    think_blocks = re.findall(
+        r"<think>(.*?)</think>",
+        action_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    think_text = "\n".join([t.strip() for t in think_blocks if t is not None])
+    think_has_chinese = 1 if _contains_cjk(think_text) else 0
+
+    contain_think_block = 1 if think_blocks else 0
+    contain_action_block = 1 if re_action_block.search(action_text) else 0
+
+    action_start_tags = re.findall(r"<action\b", action_text, flags=re.IGNORECASE)
+    action_multiple_actions = 1 if len(action_start_tags) > 1 else 0
+
+    action_blocks = re_action_block.findall(action_text)
+    if action_multiple_actions == 0 and len(action_blocks) == 1:
+        action_payload = (action_blocks[0] or "").strip()
+        try:
+            parsed_payload = json.loads(action_payload)
+            if isinstance(parsed_payload, list) and len(parsed_payload) > 1:
+                action_multiple_actions = 1
+        except Exception:
+            if _count_top_level_json_objects(action_payload) > 1:
+                action_multiple_actions = 1
+
+    return contain_think_block, contain_action_block, think_has_chinese, action_multiple_actions
+
+
+def _update_info_flags(
+    info: Dict[str, Any],
+    contain_think_block: int,
+    contain_action_block: int,
+    think_has_chinese: int,
+    action_multiple_actions: int,
+    are_json_format: int = 0,
+) -> None:
+    info["contain_think_block"] = contain_think_block
+    info["contain_action_block"] = contain_action_block
+    info["are_json_format"] = are_json_format
+    info["think_has_chinese"] = think_has_chinese
+    info["action_multiple_actions"] = action_multiple_actions
+
+
+def _collect_valid_uuids(info: Dict[str, Any]) -> List[str]:
+    raw_observation = info.get("raw_observation") or {}
+    ui = raw_observation.get("ui") or {}
+    inventory = ui.get("inventoryObjects") or []
+    accessible = ui.get("accessibleEnvironmentObjects") or []
+
+    valid_uuids = []
+    for obj in list(inventory) + list(accessible):
+        if isinstance(obj, dict) and obj.get("name") not in ["wall", "floor", "grass", "path"]:
+            valid_uuids.append(str(obj.get("uuid")))
+    return valid_uuids
+
+
+def _select_candidate_text(action_text: str, re_action_block: re.Pattern) -> str:
+    m = re_action_block.search(action_text)
+    if not m:
+        braced = _extract_last_braced_object(action_text)
+        if braced is not None:
+            return braced
+        return action_text.strip()[-512:]
+    return m.group(1).strip()
+
+
+def _resolve_canonical_choice(candidate_text: str) -> Optional[str]:
+    normalized_choice = _normalize_action_choice(candidate_text)
+    if not normalized_choice:
+        return None
+
+    choice_l = normalized_choice.lower()
+    for k in all_plausible_action_mapper.keys():
+        if choice_l == k.lower():
+            return k
+    return None
+
+
+def _parse_candidate_json(candidate_text: str) -> Optional[Dict[str, Any]]:
+    try:
+        tmp = json.loads(candidate_text)
+        if isinstance(tmp, dict):
+            return tmp
+    except Exception:
+        pass
+    return _extract_json_from_text(candidate_text)
+
+
+def _resolve_candidate_action(
+    parsed: Optional[Dict[str, Any]],
+    original: str,
+    candidate_text: str,
+    object_seen: Dict[str, str],
+) -> Optional[Dict[str, Any]]:
+    if parsed is None:
+        return None
+
+    action_name = parsed.get("action")
+    if not isinstance(action_name, str) or action_name not in AVAILABLE_ACTIONS:
+        return None
+
+    candidate_action = dict(parsed)
+    if "arg1" in candidate_action:
+        arg1_old = candidate_action["arg1"]
+        candidate_action["arg1"] = _find_uuid_from_text(str(arg1_old), object_seen)
+    if "arg2" in candidate_action:
+        arg2_old = candidate_action["arg2"]
+        candidate_action["arg2"] = _find_uuid_from_text(str(arg2_old), object_seen)
+
+    if action_name in _MOVE_ROTATE_ACTIONS:
+        direction = str(candidate_action.get("arg1", "")).lower()
+        if direction not in _DIRECTIONS:
+            direction = _extract_direction(original or candidate_text)
+            if direction:
+                candidate_action["arg1"] = direction
+    elif action_name in _SINGLE_OBJECT_ACTIONS:
+        arg1 = candidate_action.get("arg1")
+        if not arg1:
+            uuid = _find_uuid_from_text(original or candidate_text, object_seen)
+            if uuid:
+                candidate_action["arg1"] = uuid
+    elif action_name in _DOUBLE_OBJECT_ACTIONS:
+        arg1 = candidate_action.get("arg1")
+        arg2 = candidate_action.get("arg2")
+        if not arg1 or not arg2:
+            left_uuid, right_uuid = _find_two_uuids_from_text(
+                original or candidate_text,
+                object_seen,
+            )
+            if not arg1 and left_uuid:
+                candidate_action["arg1"] = left_uuid
+            if not arg2 and right_uuid:
+                candidate_action["arg2"] = right_uuid
+        candidate_action = _prefer_jar_as_arg2(
+            candidate_action,
+            original or candidate_text,
+            object_seen,
+        )
+
+    return candidate_action
+
+
+def _fallback_candidate_action(
+    original: str,
+    object_seen: Dict[str, str],
+) -> Optional[Dict[str, Any]]:
+    candidate_action = _infer_move_or_rotate(original)
+    if candidate_action is not None:
+        return candidate_action
+
+    action_name = _infer_object_action(original)
+    if action_name in _SINGLE_OBJECT_ACTIONS:
+        uuid = _find_uuid_from_text(original, object_seen)
+        return {"action": action_name, "arg1": uuid}
+
+    if action_name in _DOUBLE_OBJECT_ACTIONS:
+        uuid2 = _find_uuid_from_text("jar", object_seen)
+        uuid1 = _find_uuid_from_text(re.sub(r"jar", " ", original.lower()), object_seen)
+        if uuid1 and uuid2:
+            return {"action": action_name, "arg1": uuid1, "arg2": uuid2}
+
+    return None
+
+
+def _pack_action_result(
+    candidate_action: Optional[Dict[str, Any]],
+    valid_uuids: List[str],
+) -> Tuple[int, str]:
+    if candidate_action is None:
+        return 0, _DEFAULT_SAFE_ACTION
+
+    action_name = candidate_action.get("action")
+    if action_name in _MOVE_ROTATE_ACTIONS and candidate_action.get("arg1") not in _DIRECTIONS:
+        return 0, _DEFAULT_SAFE_ACTION
+    if action_name in _SINGLE_OBJECT_ACTIONS and candidate_action.get("arg1") not in valid_uuids:
+        return 0, json.dumps(candidate_action)
+    if action_name in _DOUBLE_OBJECT_ACTIONS and (
+        candidate_action.get("arg1") not in valid_uuids
+        or candidate_action.get("arg2") not in valid_uuids
+    ):
+        return 0, json.dumps(candidate_action)
+
+    return 1, json.dumps(candidate_action, separators=(",", ":"))
+
 
 def discoveryworld_projection(
     actions: List[str],
     infos: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[str], List[int]]:
+    
+    # A projection method which is compatible with both text action and JSON action format.
+    # Detects think and action blocks with robust heuristics and applies various fallback strategies to extract a valid action.
 
     processed: List[str] = []
     valids: List[int] = [0] * len(actions)
     contain_think_block: List[int] = [0] * len(actions)
+    contain_action_block: List[int] = [0] * len(actions)
     are_json_format: List[int] = [0] * len(actions)
 
     re_action_block = re.compile(r"<action>(.*?)</action>", re.IGNORECASE | re.DOTALL)
 
-    object_seen_list: List[Dict[str, str]] = []
-    if infos:
-        for info in infos:
-            seen = info.get("object_seen") or {}
-            if isinstance(seen, dict):
-                object_seen_list.append({str(k): str(v) for k, v in seen.items()})
-            else:
-                object_seen_list.append({})
-    else:
-        object_seen_list = [{} for _ in actions]
+    object_seen_list = _build_object_seen_list(infos, actions)
 
     for i, action_str in enumerate(actions):
         action_text = action_str or ""
 
-        # Detect whether the original model output contains a <think>...</think> block.
-        # If no block, contain_think_block[i] = 0; else 1.
-        contain_think_block[i] = 1 if re.search(
-            r"<think>.*?</think>",
-            action_text,
-            flags=re.IGNORECASE | re.DOTALL,
-        ) else 0
+        (
+            contain_think_block[i],
+            contain_action_block[i],
+            think_has_chinese,
+            action_multiple_actions,
+        ) = _extract_detection_flags(action_text, re_action_block)
 
         original = _strip_think_blocks(action_text)
 
         info_i: Dict[str, Any] = infos[i] if (infos is not None and i < len(infos)) else {}
-        # Expose debugging flags downstream without changing the return signature.
         if infos is not None and i < len(infos):
-            info_i["contain_think_block"] = contain_think_block[i]
-            info_i["are_json_format"] = 0
+            _update_info_flags(
+                info_i,
+                contain_think_block[i],
+                contain_action_block[i],
+                think_has_chinese,
+                action_multiple_actions,
+                are_json_format=0,
+            )
 
         object_seen = object_seen_list[i] if i < len(object_seen_list) else {}
 
-        valid_uuids = set()
-        raw_observation = info_i.get("raw_observation") or {}
-        ui = raw_observation.get("ui") or {}
-        inventory = ui.get("inventoryObjects") or []
-        accessible = ui.get("accessibleEnvironmentObjects") or []
-        for obj in list(inventory) + list(accessible):
-            if isinstance(obj, dict) and obj.get("name") not in ["wall", "floor", "grass", "path"]:
-                valid_uuids.add(str(obj.get("uuid")))
-        
-        
-        m = re_action_block.search(action_text)
-        if not m:
+        valid_uuids = _collect_valid_uuids(info_i)
 
-            braced = _extract_last_braced_object(action_text)
-            if braced is not None:
-                candidate_text = braced
-            else:
-                candidate_text = action_text.strip()[-512:]
+        candidate_text = _select_candidate_text(action_text, re_action_block)
+
+        # If the model chose an action from the provided action-options menu,
+        # map that choice back to a canonical string and infer the JSON action.
+        # We accept minor formatting noise (bullets, quotes).
+        canonical_choice = _resolve_canonical_choice(candidate_text)
+        if canonical_choice is not None:
+            # Replace `original` with the canonical menu choice so downstream
+            # heuristics (_infer_move_or_rotate, _find_uuid_from_text, etc.)
+            # can resolve directions / object UUIDs.
+            original = canonical_choice
+            parsed = None
         else:
-            candidate_text = m.group(1).strip()
+            parsed: Optional[Dict[str, Any]] = None
+        parsed = _parse_candidate_json(candidate_text)
 
-        parsed: Optional[Dict[str, Any]] = None
-        try:
-            tmp = json.loads(candidate_text)
-            if isinstance(tmp, dict):
-                parsed = tmp
-        except Exception:
-            parsed = _extract_json_from_text(candidate_text)
+        candidate_action = _resolve_candidate_action(
+            parsed,
+            original,
+            candidate_text,
+            object_seen,
+        )
+        if candidate_action is None:
+            candidate_action = _fallback_candidate_action(original, object_seen)
 
-        candidate_action: Optional[Dict[str, Any]] = None
         if parsed is not None:
             are_json_format[i] = 1
             if infos is not None and i < len(infos):
                 info_i["are_json_format"] = 1
-            action_name = parsed.get("action")
-            if isinstance(action_name, str) and action_name in AVAILABLE_ACTIONS:
-                candidate_action = dict(parsed)
-                if "arg1" in candidate_action:
-                    arg1_old = candidate_action["arg1"]
-                    candidate_action["arg1"] = _find_uuid_from_text(str(arg1_old), object_seen)
-                if "arg2" in candidate_action:
-                    arg2_old = candidate_action["arg2"]
-                    candidate_action["arg2"] = _find_uuid_from_text(str(arg2_old), object_seen)
-                if action_name in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
-                    direction = str(candidate_action.get("arg1", "")).lower()
-                    if direction not in _DIRECTIONS:
-                        direction = _extract_direction(original or candidate_text)
-                        if direction:
-                            candidate_action["arg1"] = direction
-                elif action_name in _SINGLE_OBJECT_ACTIONS:
-                    arg1 = candidate_action.get("arg1")
-                    if not arg1:
-                        uuid = _find_uuid_from_text(original or candidate_text, object_seen)
-                        if uuid:
-                            candidate_action["arg1"] = uuid
-                elif action_name in _DOUBLE_OBJECT_ACTIONS:
-                    arg1 = candidate_action.get("arg1")
-                    arg2 = candidate_action.get("arg2")
-                    if not arg1 or not arg2:
-                        left_uuid, right_uuid = _find_two_uuids_from_text(
-                            original or candidate_text,
-                            object_seen,
-                        )
-                        if not arg1 and left_uuid:
-                            candidate_action["arg1"] = left_uuid
-                        if not arg2 and right_uuid:
-                            candidate_action["arg2"] = right_uuid
-                    candidate_action = _prefer_jar_as_arg2(
-                        candidate_action,
-                        original or candidate_text,
-                        object_seen,
-                    )
 
-        if candidate_action is None:
-            candidate_action = _infer_move_or_rotate(original)
-
-        if candidate_action is None:
-            action_name = _infer_object_action(original)
-            if action_name in _SINGLE_OBJECT_ACTIONS:
-                uuid = _find_uuid_from_text(original, object_seen)
-                candidate_action = {"action": action_name, "arg1": uuid}
-
-        if candidate_action is None:
-            action_name = _infer_object_action(original)
-            if action_name in _DOUBLE_OBJECT_ACTIONS:
-                uuid2 = _find_uuid_from_text("jar", object_seen)
-                uuid1 = _find_uuid_from_text(re.sub(r"jar", " ", original.lower()), object_seen)
-                if uuid1 and uuid2:
-                    candidate_action = {
-                        "action": action_name,
-                        "arg1": uuid1,
-                        "arg2": uuid2,
-                    }
-
-        if candidate_action is None:
-            valids[i] = 0
-            processed.append(_DEFAULT_SAFE_ACTION)
-        else:
-            if candidate_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"} and candidate_action.get("arg1") not in _DIRECTIONS:
-                valids[i] = 0
-                processed.append(_DEFAULT_SAFE_ACTION)
-            elif candidate_action.get("action") in _SINGLE_OBJECT_ACTIONS and candidate_action.get("arg1") not in valid_uuids:
-                valids[i] = 0
-                processed.append(json.dumps(candidate_action))
-            elif candidate_action.get("action") in _DOUBLE_OBJECT_ACTIONS and (candidate_action.get("arg1") not in valid_uuids or candidate_action.get("arg2") not in valid_uuids):
-                valids[i] = 0
-                processed.append(json.dumps(candidate_action))
-            else:
-                valids[i] = 1
-                processed.append(json.dumps(candidate_action, separators=(",", ":")))
+        valids[i], processed_action = _pack_action_result(candidate_action, valid_uuids)
+        processed.append(processed_action)
+        
+        if infos is not None and i < len(infos):
+            info_i["is_valid"] = valids[i]
 
     return processed, valids

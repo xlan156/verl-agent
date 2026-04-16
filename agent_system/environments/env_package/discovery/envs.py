@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple, Optional
 import json
+import os
+import re
+import time
 from collections import Counter, defaultdict, deque
 
 import numpy as np
@@ -16,6 +19,26 @@ from agent_system.environments.env_package.discovery.discoveryworld.discoverywor
 )
 
 
+def _slugify(value: Optional[str]) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-") or "unknown"
+
+
+def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> str:
+    scenario = _slugify(env_kwargs.get("scenario_name"))
+    difficulty = _slugify(env_kwargs.get("difficulty"))
+    model_name = _slugify(env_kwargs.get("model_name") or os.environ.get("MODEL_NAME"))
+    job_id = _slugify(os.environ.get("SLURM_JOB_ID"))
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    split = "train" if is_train else "eval"
+    return os.path.join(
+        "outputs",
+        "discoveryworld_frames",
+        f"{scenario}__{difficulty}__{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
+    )
+
+
 class DiscoveryWorldEnv:
 
     def __init__(
@@ -25,12 +48,16 @@ class DiscoveryWorldEnv:
         difficulty: Optional[str] = None,
         max_steps: int = 50,
         thread_id: int = 0,
+        save_frames: bool = False,
+        frames_dir: Optional[str] = None,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
         self._difficulty = difficulty
         self._max_steps = max_steps
         self._thread_id = thread_id
+        self._save_frames = bool(save_frames)
+        self._frames_dir = frames_dir
 
         self._api: Optional[DiscoveryWorldAPI] = None
         self._steps: int = 0
@@ -46,8 +73,10 @@ class DiscoveryWorldEnv:
         self.init_reward_shaping()
 
     def _init_api(self) -> None:
-
         self._api = DiscoveryWorldAPI(threadID=self._thread_id)
+        self._api.save_frames = self._save_frames
+        if self._frames_dir:
+            self._api.FRAME_DIR = os.path.join(self._frames_dir, f"thread-{self._thread_id}")
         ok = self._api.loadScenario(
             scenarioName=self._scenario_name,
             difficultyStr=self._difficulty,
@@ -264,10 +293,14 @@ class DiscoveryWorldEnv:
         if isinstance(action_json, dict):
             meta = action_json.pop("__meta", {}) or {}
         contain_think_block = int(meta.get("contain_think_block", 0)) if isinstance(meta, dict) else 0
+        contain_action_block = int(meta.get("contain_action_block", 0)) if isinstance(meta, dict) else 0
         are_json_format = int(meta.get("are_json_format", 0)) if isinstance(meta, dict) else 0
+        think_has_chinese = int(meta.get("think_has_chinese", 0)) if isinstance(meta, dict) else 0
+        action_multiple_actions = int(meta.get("action_multiple_actions", 0)) if isinstance(meta, dict) else 0
+        is_valid = int(meta.get("is_valid", 0)) if isinstance(meta, dict) else 0
 
         # Pre-check the structured action for obviously invalid arguments
-        invalid_arg_penalty = self._compute_invalid_action_penalty(action_json)
+        #invalid_arg_penalty = self._compute_invalid_action_penalty(action_json)
 
         result = self._api.performAgentAction(agentIdx=0, actionJSON=action_json)
         self._last_action_result = result
@@ -278,38 +311,50 @@ class DiscoveryWorldEnv:
         # reward shaping
         text_obs, info = self._format_obs_and_info()
         info["contain_think_block"] = contain_think_block
+        info["contain_action_block"] = contain_action_block
         info["are_json_format"] = are_json_format
-        
-        # Bonus for encountering new objects
-        ui = (info.get("raw_observation") or {}).get("ui", {})
-        self._update_object_seen_from_ui(ui)
-        info["object_seen"] = dict(self.object_seen)
-                
-        bonus_exploring = self.add_bonus_for_exploring(action_json.get("action", ""), info)
-        
+        info["think_has_chinese"] = think_has_chinese
+        info["action_multiple_actions"] = action_multiple_actions
+        info["is_valid"] = is_valid
+         
         # increment
         cur_score = float(info.get("score_normalized", 0.0))
-        ingame_process_reward = cur_score - self._prev_score
+        ingame_process_reward = (cur_score - self._prev_score) * 10
         self._prev_score = cur_score
         
-        # format reward
-        if contain_think_block and are_json_format:
-            format_reward = 1
-        else:            
-            format_reward = 0
-            
+        # new action bonus
+        new_action_bonus = 0.0
+        if action_json.get("action") and is_valid:
+            self.action_counter[action_json["action"]] += 1
+            if self.action_counter[action_json["action"]] == 1:
+                new_action_bonus += 0.1  # small bonus for trying a new valid action
         
-        # error penalty
-        penalty_for_error = self.penalize_error_action(result)
-
+        # format reward: negative score when format is incorrect
+        format_reward = 0.0
+        format_reward += int(are_json_format == 1)
+        format_reward -= int(contain_think_block == 1)
+        format_reward -= int(contain_action_block == 1)
+        format_reward -= int(action_multiple_actions == 1)
+        format_reward -= int(think_has_chinese == 1)
+            
+        env_compatible_reward = int(result.get("success", False) and info["is_valid"] == 1)
+        
+        # Repetition penalty
+        repetition_penalty = 0.0
+        if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
+            repetition_penalty = -0.15
+        
+        # Win reward
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
         won_reward = 100.0 if info["won"] else 0.0
         
         reward = (
-            + 0.3 * penalty_for_error
-            + 0.2 * format_reward
-            + 0.5 * (ingame_process_reward + won_reward)
+            + 0.1 * env_compatible_reward
+            + 0.05 * format_reward
+            + 0.95 * (ingame_process_reward)
+            + repetition_penalty
+            + new_action_bonus
         )
 
         return text_obs, reward, done, info
@@ -321,104 +366,7 @@ class DiscoveryWorldEnv:
         """Return a small bonus reward for taking the first action, to encourage shorter solutions."""
         if self._steps <= 10 and action_str in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
             return 0.1
-        return 0.0
-    
-    def penalize_error_action(self, result: Dict[str, Any]) -> float:
-        """Return a penalty if the last action resulted in an error, to encourage valid actions."""
-        if len(result.get("errors", [])) > 0:
-            return 0
-        return 1
-
-    def _compute_invalid_action_penalty(self, action_json: Dict[str, Any]) -> float:
-        """Return an extra penalty when the agent uses invalid directions or UUIDs.
-
-        - MOVE_DIRECTION / ROTATE_DIRECTION must use one of {north, east, south, west}.
-        - For actions whose arguments are expected to be objects/agents, all arg* values
-          must be among the currently interactable object UUIDs.
-        """
-
-        if self._api is None:
-            return 0.0
-
-        if not isinstance(action_json, dict) or not action_json:
-            # Completely malformed or empty action
-            return -0.05
-
-        action_name = action_json.get("action", "")
-        if not action_name:
-            return -0.05
-
-        # Direction-only actions: check that the direction is valid
-        if action_name in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
-            direction = str(action_json.get("arg1", "")).lower()
-            if direction not in {"north", "south", "east", "west"}:
-                return -0.05
-            return 0.0
-
-        # Actions that do not take UUID/object arguments: skip UUID checks
-        if action_name in {"TELEPORT_TO_LOCATION", "DISCOVERY_FEED_GET_UPDATES", "DISCOVERY_FEED_GET_POST_BY_ID"}:
-            return 0.0
-
-        # Build the current set of interactable UUIDs from the UI observation
-        try:
-            observation = self._api.getAgentObservation(agentIdx=0) or {}
-            ui = observation.get("ui", {}) or {}
-        except Exception:
-            return 0.0
-
-        valid_uuids_inventory = set()
-        valid_uuids_accessible = set()
-
-        for obj in ui.get("inventoryObjects", []) or []:
-            uuid = obj.get("uuid")
-            if uuid is not None:
-                valid_uuids_inventory.add(str(uuid))
-    
-        for obj in ui.get("accessibleEnvironmentObjects", []) or []:
-            uuid = obj.get("uuid")
-            if uuid is not None:
-                valid_uuids_accessible.add(str(uuid))
-
-        valid_uuids_nearby = set()
-        nearby = ui.get("nearbyObjects", {}).get("objects", {}) or {}
-        for objects in nearby.values():
-            for obj in objects or []:
-                uuid = obj.get("uuid")
-                if uuid is not None:
-                    valid_uuids_nearby.add(str(uuid))
-
-        # Some actions (e.g., TALK) may use nearby agents as targets
-        valid_uuids_agents = set()
-        nearby_agents = ui.get("nearbyAgents", {}).get("list_of_agents", {}) or {}
-        for agent_info in nearby_agents.values():
-            if isinstance(agent_info, dict):
-                uuid = agent_info.get("uuid")
-                if uuid is not None:
-                    valid_uuids_agents.add(str(uuid))
-
-        # For all remaining actions, treat arg* fields as expected object/agent UUIDs.
-        # If any provided UUID is not in the interactable set, apply a penalty.
-        has_args = False
-        all_valid_uuids = valid_uuids_inventory | valid_uuids_accessible | valid_uuids_nearby | valid_uuids_agents
-        for key, value in action_json.items():
-            if not key.startswith("arg"):
-                continue
-            has_args = True
-            if value is None:
-                return -0.05
-            if str(value) not in all_valid_uuids:
-                return -0.05
-            if key == "arg1" and str(value) not in valid_uuids_inventory:
-                return -0.05
-            if key == "arg2" and str(value) not in valid_uuids_accessible:
-                return -0.05
-
-        # If an action that should reference objects has no args at all, penalize
-        if not has_args and action_name in {"PICKUP", "DROP", "PUT", "OPEN", "CLOSE", "ACTIVATE", "DEACTIVATE", "TALK", "EAT", "READ", "USE", "TELEPORT_TO_OBJECT"}:
-            return -0.05
-
-        return 0.0
-        
+        return 0.0    
 
 
 class DiscoveryWorldWorker:
@@ -434,6 +382,8 @@ class DiscoveryWorldWorker:
         scenario_name = env_kwargs.get("scenario_name")
         difficulty = env_kwargs.get("difficulty")
         max_steps = int(env_kwargs.get("max_steps", 50))
+        save_frames = bool(env_kwargs.get("save_frames", False))
+        frames_dir = env_kwargs.get("frames_dir")
 
         self._env = DiscoveryWorldEnv(
             seed=seed,
@@ -441,6 +391,8 @@ class DiscoveryWorldWorker:
             difficulty=difficulty,
             max_steps=max_steps,
             thread_id=thread_id,
+            save_frames=save_frames,
+            frames_dir=frames_dir,
         )
 
     def reset(self) -> Tuple[str, Dict[str, Any]]:
@@ -486,6 +438,10 @@ class DiscoveryWorldVectorEnv:
             ray.init()
 
         env_kwargs = env_kwargs or {}
+        if "save_frames" not in env_kwargs:
+            env_kwargs["save_frames"] = (not is_train)
+        if env_kwargs.get("save_frames") and "frames_dir" not in env_kwargs:
+            env_kwargs["frames_dir"] = _build_frames_dir(env_kwargs, seed, is_train)
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
         for i in range(self.num_processes):

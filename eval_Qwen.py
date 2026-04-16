@@ -8,7 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-from agent_system.environments.env_package.discovery.projection import (
+from agent_system.environments.env_package.discovery.projection2 import (
     discoveryworld_projection,
 )
 from agent_system.environments.prompts.discoveryworld import (

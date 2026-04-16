@@ -82,8 +82,13 @@ def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
         'USE("jar", "Substance A")',
     ]
     action_json_str = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"})
+    action_json_str = "MOVE_DIRECTION, west"
     
-    string_candidates = [f"<think> This step is .... </think><action>{action_json_str}</action> "]
+    string_candidates = [f"<action>abx  kjajsk  kjas  Pick up the key</action>",
+                         f"<action> move to the west </action>",
+                         f"<action> Use substance A on the jar </action>",
+                         f"<action> put the key into the jar</action>"
+                         ]
     out = random.choice(string_candidates)
     return out
 

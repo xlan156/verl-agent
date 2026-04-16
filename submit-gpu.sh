@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=1
-#SBATCH --time=1:00:00
+#SBATCH --time=1:30:00
 #SBATCH --output=job_log/GiGPO_%j/GiGPO_output_%j.txt
 #SBATCH --error=job_log/GiGPO_%j/GiGPO_error_%j.txt
 
