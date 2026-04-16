@@ -19,6 +19,7 @@ from collections import defaultdict
 from functools import partial
 import os
 import json
+import re
 
 import numpy as np
 from omegaconf import OmegaConf
@@ -27,6 +28,25 @@ from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
 from agent_system.environments.env_package.discovery.actions import all_plausible_action_mapper
+
+
+_ACTION_META_RE = re.compile(r"\s*,?\s*\"__meta\"\s*:\s*\{[^{}]*\}")
+
+
+def _strip_action_meta(text: Any) -> Any:
+    if not text:
+        return text
+    if isinstance(text, dict):
+        cleaned = dict(text)
+        cleaned.pop("__meta", None)
+        return cleaned
+    if isinstance(text, list):
+        return [_strip_action_meta(item) for item in text]
+    if isinstance(text, str):
+        cleaned = _ACTION_META_RE.sub("", text)
+        cleaned = re.sub(r",\s*\}", "}", cleaned)
+        return cleaned
+    return text
 
 
 def parse_gamefile(infos):
@@ -706,8 +726,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             task_desc = infos[i].get("task_description", "")
             teleport_locs = infos[i].get("teleport_locations", {})
             last_result = infos[i].get("last_action_result", {})
-            filtered_actions = self.filter_plausible_actions(infos[i])
-            filtered_actions = "\n".join(f"{a}" for a in filtered_actions)
+            #filtered_actions = self.filter_plausible_actions(infos[i])
+            #filtered_actions = "\n".join(f"{a}" for a in filtered_actions)
 
             ui_json = text_obs[i]
             teleport_str = "\n".join(f"{loc}" for loc, _ in teleport_locs.items())
@@ -724,6 +744,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             else:
                 history_block = memory_contexts[i]
                 history_len = valid_lens[i]
+
+                history_block = _strip_action_meta(history_block)
 
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     task_description=task_desc,

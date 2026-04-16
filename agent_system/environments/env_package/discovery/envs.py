@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import os
 import re
 import time
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 
 import numpy as np
 import ray
@@ -13,7 +13,7 @@ import ray
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
 )
-from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.ScenarioMaker import(
+from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.ScenarioMaker import (
     SCENARIOS,
     SCENARIO_DIFFICULTY_OPTIONS,
 )
@@ -28,14 +28,14 @@ def _slugify(value: Optional[str]) -> str:
 def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> str:
     scenario = _slugify(env_kwargs.get("scenario_name"))
     difficulty = _slugify(env_kwargs.get("difficulty"))
-    model_name = _slugify(env_kwargs.get("model_name") or os.environ.get("MODEL_NAME"))
+    model_name = env_kwargs.get("model_name") or os.environ.get("MODEL_NAME")
     job_id = _slugify(os.environ.get("SLURM_JOB_ID"))
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     split = "train" if is_train else "eval"
     return os.path.join(
         "outputs",
         "discoveryworld_frames",
-        f"{scenario}__{difficulty}__{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
+        f"{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
     )
 
 
@@ -67,7 +67,7 @@ class DiscoveryWorldEnv:
         self.recent_history = {
             "observations": deque(maxlen=3),
             "actions": deque(maxlen=3),
-            }
+        }
         
         # reward shaping
         self.init_reward_shaping()
