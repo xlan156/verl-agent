@@ -5,19 +5,12 @@ import json
 import os
 import re
 import time
-from collections import defaultdict, deque
-import math
-
-import numpy as np
+from collections import defaultdict
 import ray
 import torch
 
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
-)
-from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.ScenarioMaker import (
-    SCENARIOS,
-    SCENARIO_DIFFICULTY_OPTIONS,
 )
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgent
 
@@ -40,6 +33,9 @@ def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> 
         "discoveryworld_frames",
         f"{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
     )
+
+
+IGNORED_OBJECT_NAMES = {"floor", "wall", "grass", "path"}
 
 
 class DiscoveryWorldEnv:
@@ -88,11 +84,11 @@ class DiscoveryWorldEnv:
             )
     
     def init_reward_shaping(self):
-        self.action_history: List[Dict[str, Any]] = []
+        self.action_history: List[Optional[str]] = []
         self.action_counter = defaultdict(int)
-        self.object_seen = defaultdict(str)
+        self.object_seen: Dict[str, str] = {}
         self._object_name_counts = defaultdict(int)
-        self.location_history = []
+        self.location_history: List[Tuple[Optional[int], Optional[int]]] = []
         self.rule_based_agent = RulebasedAgent(self)
 
     def _record_object_seen(self, name: str, uuid: Any) -> None:
@@ -151,14 +147,14 @@ class DiscoveryWorldEnv:
 
     def _update_object_seen_from_ui(self, ui: Dict[str, Any]) -> None:
         for obj in ui.get("inventoryObjects", []) or []:
-            if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+            if obj.get("name") not in IGNORED_OBJECT_NAMES:
                 self._record_object_seen(obj.get("name"), obj.get("uuid"))
         for obj in ui.get("accessibleEnvironmentObjects", []) or []:
-            if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+            if obj.get("name") not in IGNORED_OBJECT_NAMES:
                 self._record_object_seen(obj.get("name"), obj.get("uuid"))
         for direction, objects in ui.get("nearbyObjects", {}).get("objects", {}).items():
             for obj in objects or []:
-                if obj.get("name") not in ["floor", "wall", "grass", "path"]:
+                if obj.get("name") not in IGNORED_OBJECT_NAMES:
                     self._record_object_seen(obj.get("name"), obj.get("uuid"))
 
     @staticmethod
@@ -184,14 +180,14 @@ class DiscoveryWorldEnv:
         # 2. Inventory (only if non-empty)
         inventory = ui_obs.get("inventoryObjects", [])
         if inventory:
-            items = [f"{obj.get('name', 'unknown')}" for obj in inventory if obj.get("name") not in ["floor", "wall", "grass", "path"]]
+            items = [f"{obj.get('name', 'unknown')}" for obj in inventory if obj.get("name") not in IGNORED_OBJECT_NAMES]
             lines.append(f"Inventory: {', '.join(items)}")
         else:
             lines.append("Inventory: empty")
         
         # 3. Accessible Objects
         accessible = ui_obs.get("accessibleEnvironmentObjects", [])
-        accessible_objects = [f"{obj.get('name', 'unknown')}" for obj in accessible if obj.get("name") not in ["floor", "wall", "grass", "path"]]
+        accessible_objects = [f"{obj.get('name', 'unknown')}" for obj in accessible if obj.get("name") not in IGNORED_OBJECT_NAMES]
         if accessible_objects:
             lines.append(f"Accessible: {', '.join(accessible_objects)}")
         else:
@@ -206,7 +202,7 @@ class DiscoveryWorldEnv:
             nearby_objects = []
             for obj in objects:
                 distance = obj.get("distance", 99)
-                if distance <= 2 and obj.get("name") not in ["floor", "wall", "grass", "path"] and direction in ["north", "south", "east", "west"]:
+                if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES and direction in ["north", "south", "east", "west"]:
                     nearby_objects.append(f"{obj.get('name', 'unknown')} (distance={distance+1})")
             if nearby_objects:
                 nearby_summary[direction] = nearby_objects
@@ -277,30 +273,8 @@ class DiscoveryWorldEnv:
     def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
         assert self._api is not None
 
-        if isinstance(action, str):
-            try:
-                action_json = json.loads(action)
-            except Exception:
-                action_json = {}
-        elif isinstance(action, dict):
-            action_json = action
-        else:
-            raise ValueError(f"Unsupported action type: {type(action)}")
-
-        # Metadata injected by the projection layer (see DiscoveryWorldEnvironmentManager.step).
-        # Use it for reward shaping, but strip before calling the underlying API.
-        meta = {}
-        if isinstance(action_json, dict):
-            meta = action_json.pop("__meta", {}) or {}
-        contain_think_block = int(meta.get("contain_think_block", 0)) if isinstance(meta, dict) else 0
-        contain_action_block = int(meta.get("contain_action_block", 0)) if isinstance(meta, dict) else 0
-        are_json_format = int(meta.get("are_json_format", 0)) if isinstance(meta, dict) else 0
-        think_has_chinese = int(meta.get("think_has_chinese", 0)) if isinstance(meta, dict) else 0
-        action_multiple_actions = int(meta.get("action_multiple_actions", 0)) if isinstance(meta, dict) else 0
-        is_valid = int(meta.get("is_valid", 0)) if isinstance(meta, dict) else 0
-
-        # Pre-check the structured action for obviously invalid arguments
-        #invalid_arg_penalty = self._compute_invalid_action_penalty(action_json)
+        action_json = self._parse_action(action)
+        meta_flags = self._extract_meta_flags(action_json)
 
         result = self._api.performAgentAction(agentIdx=0, actionJSON=action_json)
         self._last_action_result = result
@@ -310,84 +284,92 @@ class DiscoveryWorldEnv:
 
         # reward shaping
         text_obs, info = self._format_obs_and_info()
-        info["contain_think_block"] = contain_think_block
-        info["contain_action_block"] = contain_action_block
-        info["are_json_format"] = are_json_format
-        info["think_has_chinese"] = think_has_chinese
-        info["action_multiple_actions"] = action_multiple_actions
-        info["is_valid"] = is_valid
+        info.update(meta_flags)
          
-        # increment
-        cur_score = float(info.get("score_normalized", 0.0))
-        ingame_process_reward = (cur_score - self._prev_score) * 10
-        self._prev_score = cur_score
-        
-        # new action bonus
-        new_action_bonus = 0.0
-        if action_json.get("action") and is_valid:
-            self.action_counter[action_json["action"]] += 1
-            if self.action_counter[action_json["action"]] == 1:
-                new_action_bonus = 0.1  # -0.1 for each repeat of the same action
-        
-        # action diversity reward
-        diversity_score = self.action_diversity_score()
-        
-        # Location stalling
-        stalling_penalty = 0.0
-        if len(self.location_history) >= 5 and set(self.location_history[-5:]) == {self.location_history[-1]}:
-            stalling_penalty = -0.5  # small penalty for stalling in the same location
-        
-        # format reward: negative score when format is incorrect
-        format_reward = 0.0
-        format_reward -= int(are_json_format == 0)
-        format_reward -= int(contain_think_block == 0)
-        format_reward -= int(contain_action_block == 0)
-        format_reward -= int(action_multiple_actions == 1)
-        format_reward -= int(think_has_chinese == 1)
-        format_reward -= int(is_valid == 0)
-            
-        env_compatible_reward = int(result.get("success", False) and info["is_valid"] == 1)
-        
-        # Expert action reward
-        interaction_reward = self.correct_object_reward(action_json, info)
-        expert_action = self.rule_based_agent.select_action(info)
-        action_json_copy = action_json.pop("__meta", None)
-        expert_action_reward = int(json.dumps(expert_action) == json.dumps(action_json_copy))
-        
-        # Repetition penalty
-        repetition_penalty = 0.0
-        if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
-            repetition_penalty = -0.5
-        
-        # Win reward
-        done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
-        info["won"] = bool(self._api.areTasksComplete())
-        won_reward = 20.0 if info["won"] else 0.0
-        
-        reward = (
-            + 0.05 * format_reward
-            + 1.0 * expert_action_reward
-            + ingame_process_reward
-            + stalling_penalty
-            + won_reward
-        )
+        reward, done, reward_info = self._compute_step_reward(action_json, info, meta_flags)
         print("rewards:")
-        print(f"  ingame_process_reward: {ingame_process_reward}")
-        print(f"  expert_action_reward: {expert_action_reward}")
-        print(f"  format_reward: {format_reward}")
-        print(f"  repetition_penalty: {repetition_penalty}")
-        print(f"  new_action_bonus: {new_action_bonus}")
-        print(f"  diversity_score: {diversity_score}")
-        print(f"  stalling_penalty: {stalling_penalty}")
-        print(f"  won_reward: {won_reward}")
+        print(json.dumps(reward_info, indent=2))
 
         return text_obs, reward, done, info
 
     def close(self) -> None:
         return None
+
+    def _parse_action(self, action: Any) -> Dict[str, Any]:
+        if isinstance(action, str):
+            try:
+                return json.loads(action)
+            except Exception:
+                return {}
+        if isinstance(action, dict):
+            return action
+        raise ValueError(f"Unsupported action type: {type(action)}")
+
+    def _extract_meta_flags(self, action_json: Dict[str, Any]) -> Dict[str, int]:
+        # Metadata injected by the projection layer (see DiscoveryWorldEnvironmentManager.step).
+        # Use it for reward shaping, but strip before calling the underlying API.
+        meta = action_json.pop("__meta", {}) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        return {
+            "contain_think_block": int(meta.get("contain_think_block", 0)),
+            "contain_action_block": int(meta.get("contain_action_block", 0)),
+            "are_json_format": int(meta.get("are_json_format", 0)),
+            "think_has_chinese": int(meta.get("think_has_chinese", 0)),
+            "action_multiple_actions": int(meta.get("action_multiple_actions", 0)),
+            "is_valid": int(meta.get("is_valid", 0)),
+        }
+
+    def _compute_ingame_process_reward(self, cur_score: float) -> float:
+        reward = (cur_score - self._prev_score) * 10
+        self._prev_score = cur_score
+        return reward
+
+    def _compute_new_action_bonus(self, action_name: Optional[str], is_valid: int) -> float:
+        if not action_name or not is_valid:
+            return 0.0
+        self.action_counter[action_name] += 1
+        if self.action_counter[action_name] == 1:
+            return 0.1
+        return 0.0
+
+    def _compute_stalling_penalty(self) -> float:
+        if len(self.location_history) >= 5 and set(self.location_history[-5:]) == {self.location_history[-1]}:
+            return -0.5
+        return 0.0
+
+    def _compute_format_reward(self, meta_flags: Dict[str, int]) -> float:
+        format_reward = 0.0
+        format_reward -= int(meta_flags.get("are_json_format", 0) == 0)
+        format_reward -= int(meta_flags.get("contain_think_block", 0) == 0)
+        format_reward -= int(meta_flags.get("contain_action_block", 0) == 0)
+        format_reward -= int(meta_flags.get("action_multiple_actions", 0) == 1)
+        format_reward -= int(meta_flags.get("think_has_chinese", 0) == 1)
+        format_reward -= int(meta_flags.get("is_valid", 0) == 0)
+        return format_reward
+
+    def _compute_expert_action_reward(self, action_json: Dict[str, Any], info: Dict[str, Any]) -> int:
+        expert_action = self.rule_based_agent.select_action(info)
+        action_match = int(expert_action.get("action") == action_json.get("action"))
+        if not action_match:
+            return 0
+        
+        arg1_match = 0
+        if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION", "PICKUP", "OPEN"}:
+             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
+             return arg1_match
+        
+        arg_match = 0
+        if action_match and expert_action.get("action") in {"PUT", "USE"}:
+            arg_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")) and str(expert_action.get("arg2")) == str(action_json.get("arg2")))
+            return arg_match
+
+    def _compute_repetition_penalty(self) -> float:
+        if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
+            return -0.5
+        return 0.0
     
     def action_diversity_score(self):
-        """Calculate KL divergence from the action distribution to uniform distribution."""
         if not self.action_history:
             return 0.0
         action_counts = defaultdict(int)
@@ -399,6 +381,48 @@ class DiscoveryWorldEnv:
         uniform = torch.ones_like(probs) / n
         kl = -(probs * (torch.log(probs + 1e-8) - torch.log(uniform))).sum()
         return torch.round(kl / 0.05) * 0.05
+
+    def _compute_step_reward(
+        self,
+        action_json: Dict[str, Any],
+        info: Dict[str, Any],
+        meta_flags: Dict[str, int],
+    ) -> Tuple[float, bool, Dict[str, float]]:
+        cur_score = float(info.get("score_normalized", 0.0))
+        ingame_process_reward = self._compute_ingame_process_reward(cur_score)
+        new_action_bonus = self._compute_new_action_bonus(
+            action_json.get("action"),
+            meta_flags.get("is_valid", 0),
+        )
+        diversity_score = self.action_diversity_score()
+        stalling_penalty = self._compute_stalling_penalty()
+        format_reward = self._compute_format_reward(meta_flags)
+        expert_action_reward = self._compute_expert_action_reward(action_json, info)
+        repetition_penalty = self._compute_repetition_penalty()
+
+        done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
+        info["won"] = bool(self._api.areTasksComplete())
+        won_reward = 20.0 if info["won"] else 0.0
+
+        reward = (
+            + 0.05 * format_reward
+            + 1.0 * expert_action_reward
+            + ingame_process_reward
+            + stalling_penalty
+            + won_reward
+        )
+
+        reward_info = {
+            "ingame_process_reward": ingame_process_reward,
+            "expert_action_reward": float(expert_action_reward),
+            "format_reward": format_reward,
+            "repetition_penalty": repetition_penalty,
+            "new_action_bonus": new_action_bonus,
+            "stalling_penalty": stalling_penalty,
+            "won_reward": won_reward,
+        }
+
+        return reward, done, reward_info
     
     def get_inventory_objects(self, info):
         ui = info.get("raw_observation").get("ui")
