@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
-#SBATCH --time=2:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
@@ -75,7 +75,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.8 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -91,11 +91,10 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=discoveryworld \
     env.seed=0 \
-    env.max_steps=40 \
+    env.max_steps=50 \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.save_frames=True \
-    +env.discoveryworld.frames_dir="$HOME/projects/verl-agent/outputs/discoveryworld_frames" \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
@@ -104,8 +103,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
-    trainer.save_freq=40 \
+    trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=40 \
+    trainer.total_epochs=30 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"

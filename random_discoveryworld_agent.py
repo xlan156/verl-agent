@@ -84,10 +84,8 @@ def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     action_json_str = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"})
     action_json_str = "MOVE_DIRECTION, west"
     
-    string_candidates = [f"<action>abx  kjajsk  kjas  Pick up the key</action>",
-                         f"<action> move to the west </action>",
-                         f"<action> Use substance A on the jar </action>",
-                         f"<action> put the key into the jar</action>"
+    string_candidates = [f"<action>Rotate north</action>",
+                         f"<action>Move west</action>",
                          ]
     out = random.choice(string_candidates)
     return out
@@ -175,5 +173,5 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
 if __name__ == "__main__":
     random.seed(42)
     start = time.time()
-    run_env_manager_rollout(env_num=1, max_env_steps=30)
+    run_env_manager_rollout(env_num=1, max_env_steps=40)
     print(f"Total wall time: {time.time() - start:.2f}s")

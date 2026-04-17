@@ -34,3 +34,22 @@ all_plausible_action_mapper = {
     "Wash the jar to clean substances": {"action": "USE", "arg1": "51739", "arg2": "35632"},
     "Open the door": {"action": "OPEN", "arg1": "18573"},
 }
+
+all_action_abbr = {
+    "move_west": {"action": "MOVE_DIRECTION", "arg1": "west"},
+    "move_east": {"action": "MOVE_DIRECTION", "arg1": "east"},
+    "move_south": {"action": "MOVE_DIRECTION", "arg1": "south"},
+    "rotate_north": {"action": "ROTATE_DIRECTION", "arg1": "north"},
+    "rotate_east": {"action": "ROTATE_DIRECTION", "arg1": "east"},
+    "rotate_south": {"action": "ROTATE_DIRECTION", "arg1": "south"},
+    "rotate_west": {"action": "ROTATE_DIRECTION", "arg1": "west"},
+    "pickup_key": {"action": "PICKUP", "arg1": "33120"},
+    "put_key": {"action": "PUT", "arg1": "33120", "arg2": "35632"},
+    "pickup_jar": {"action": "PICKUP", "arg1": "35632"},
+    "use_dispenser_A": {"action": "USE", "arg1": "21559", "arg2": "35632"},
+    "use_dispenser_B": {"action": "USE", "arg1": "57736", "arg2": "35632"},
+    "use_dispenser_C": {"action": "USE", "arg1": "8549", "arg2": "35632"},
+    "use_dispenser_D": {"action": "USE", "arg1": "55934", "arg2": "35632"},
+    "wash": {"action": "USE", "arg1":"51739", "arg2":"35632"},
+    "open_door": {"action": "OPEN", "arg1": "18573"},
+}
