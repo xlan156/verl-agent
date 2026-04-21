@@ -39,6 +39,7 @@ all_action_abbr = {
     "move_west": {"action": "MOVE_DIRECTION", "arg1": "west"},
     "move_east": {"action": "MOVE_DIRECTION", "arg1": "east"},
     "move_south": {"action": "MOVE_DIRECTION", "arg1": "south"},
+    "move_north": {"action": "MOVE_DIRECTION", "arg1": "north"},
     "rotate_north": {"action": "ROTATE_DIRECTION", "arg1": "north"},
     "rotate_east": {"action": "ROTATE_DIRECTION", "arg1": "east"},
     "rotate_south": {"action": "ROTATE_DIRECTION", "arg1": "south"},

@@ -84,9 +84,16 @@ def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     action_json_str = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"})
     action_json_str = "MOVE_DIRECTION, west"
     
-    string_candidates = [f"<action>Rotate north</action>",
-                         f"<action>Move west</action>",
-                         ]
+    string_candidates = [
+        json.dumps({"action": "ROTATE_DIRECTION", "arg1": "north"}),
+        json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"}),
+        json.dumps({"action": "MOVE_DIRECTION", "arg1": "east"}),
+        json.dumps({"action": "PICKUP", "arg1": "Key"}),
+        json.dumps({"action": "PUT", "arg1": "Key", "arg2": "Jar"}),
+        json.dumps({"action": "PICKUP", "arg1": "Jar"}),
+        json.dumps({"action": "USE", "arg1": "Dispenser B", "arg2": "Jar"}),
+        json.dumps({"action": "OPEN", "arg1": "Door"}),
+    ]
     out = random.choice(string_candidates)
     return out
 

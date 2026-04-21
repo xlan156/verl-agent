@@ -26,7 +26,8 @@ Below is the current state of the world from the agent's perspective:
 
 NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
 NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
-NOTE: Only accessible objects can be interacted with (pickup, use, put, etc.). If there is no accessible object, you can only move or rotate.
+If there is no accessible object in your current location or facing direction, you are encouraged to move or rotate to explore more areas to find accessible objects.
+When you encounter accessible objects in observation, you can choose to interact with them using PICKUP, PUT, OPEN, or USE actions.
 
 You can now take your action using the following JSON format:
 {{"action": action_name, "arg1": item, "arg2": item}}
@@ -55,7 +56,8 @@ So far you have taken a total of {step_count} step(s). Below are the most recent
 
 NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
 NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
-NOTE: Only accessible objects can be interacted with (pickup, use, put, etc.). If there is no accessible object, you can only move or rotate.
+If there is no accessible object in your current location or facing direction, you are encouraged to move or rotate to explore more areas to find accessible objects.
+When you encounter accessible objects in observation, you can choose to interact with them using PICKUP, PUT, OPEN, or USE actions.
 
 You can now take your action using the following JSON format:
 {{"action": action_name, "arg1": item, "arg2": item}}

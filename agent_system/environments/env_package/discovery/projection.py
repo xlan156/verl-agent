@@ -54,6 +54,7 @@ _MOVE_ROTATE_ACTIONS = {"MOVE_DIRECTION", "ROTATE_DIRECTION"}
 _DIRECTIONS = {"north", "south", "east", "west"}
 _SINGLE_OBJECT_ACTIONS = {"PICKUP", "OPEN"}
 _DOUBLE_OBJECT_ACTIONS = {"USE", "PUT"}
+_OBJECT_KEYWORD_GROUP = {"chemical", "compound", "dispenser", "substance"}
 
 
 def _contains_cjk(text: str) -> bool:
@@ -186,9 +187,36 @@ def _find_uuid_from_text(text: str, object_seen: Dict[str, str]) -> Optional[str
     if not object_seen:
         return None
 
+    def _normalize_tokens(tokens: set) -> set:
+        normalized = set(tokens)
+        if "compound" in normalized:
+            normalized.add("substance")
+        if "substance" in normalized:
+            normalized.add("compound")
+        return normalized
+
+    def _has_required_keyword(name_tokens: set, text_tokens: set) -> bool:
+        if not (name_tokens & _OBJECT_KEYWORD_GROUP):
+            return True
+        return bool(text_tokens & _OBJECT_KEYWORD_GROUP)
+
+    def _tokens_match(name_tokens: set, text_tokens: set) -> bool:
+        if not name_tokens or not text_tokens:
+            return False
+        if name_tokens.issubset(text_tokens):
+            return True
+        if len(text_tokens) == 1:
+            token = next(iter(text_tokens))
+            return token in name_tokens and len(token) >= 3
+        if len(name_tokens) == 1:
+            token = next(iter(name_tokens))
+            return token in text_tokens and len(token) >= 3
+        overlap = name_tokens.intersection(text_tokens)
+        return len(overlap) >= 2
+
     text_l = text.lower()
     text_norm = re.sub(r"[^a-z0-9]+", " ", text_l).strip()
-    text_tokens = set(text_norm.split())
+    text_tokens = _normalize_tokens(set(text_norm.split()))
 
     for name, uuid in object_seen.items():
         if not name:
@@ -199,10 +227,8 @@ def _find_uuid_from_text(text: str, object_seen: Dict[str, str]) -> Optional[str
         name_norm = re.sub(r"[^a-z0-9]+", " ", name_l).strip()
         if name_norm and (name_norm in text_norm or text_norm in name_norm):
             return str(uuid)
-        name_tokens = set(name_norm.split()) if name_norm else set()
-        if name_tokens and name_tokens.issubset(text_tokens):
-            return str(uuid)
-        if name_tokens and any(tok in text_tokens and len(tok) >= 3 for tok in name_tokens):
+        name_tokens = _normalize_tokens(set(name_norm.split())) if name_norm else set()
+        if _has_required_keyword(name_tokens, text_tokens) and _tokens_match(name_tokens, text_tokens):
             return str(uuid)
 
     base_map: Dict[str, str] = {}
@@ -217,10 +243,8 @@ def _find_uuid_from_text(text: str, object_seen: Dict[str, str]) -> Optional[str
         base_norm = re.sub(r"[^a-z0-9]+", " ", base).strip()
         if base_norm and (base_norm in text_norm or text_norm in base_norm):
             return uuid
-        base_tokens = set(base_norm.split()) if base_norm else set()
-        if base_tokens and base_tokens.issubset(text_tokens):
-            return uuid
-        if base_tokens and any(tok in text_tokens and len(tok) >= 3 for tok in base_tokens):
+        base_tokens = _normalize_tokens(set(base_norm.split())) if base_norm else set()
+        if _has_required_keyword(base_tokens, text_tokens) and _tokens_match(base_tokens, text_tokens):
             return uuid
 
     return None

@@ -35,7 +35,7 @@ def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> 
     )
 
 
-IGNORED_OBJECT_NAMES = {"floor", "wall", "grass", "path"}
+IGNORED_OBJECT_NAMES = {"floor", "wall", "grass", "path", "table"}
 
 
 class DiscoveryWorldEnv:
@@ -202,8 +202,8 @@ class DiscoveryWorldEnv:
             nearby_objects = []
             for obj in objects:
                 distance = obj.get("distance", 99)
-                if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES and direction in ["north", "south", "east", "west"]:
-                    nearby_objects.append(f"{obj.get('name', 'unknown')} (distance={distance+1})")
+                if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES:
+                    nearby_objects.append(f"{obj.get('name', 'unknown')} (distance={distance})")
             if nearby_objects:
                 nearby_summary[direction] = nearby_objects
         
@@ -284,6 +284,9 @@ class DiscoveryWorldEnv:
 
         # reward shaping
         text_obs, info = self._format_obs_and_info()
+        ui = (info.get("raw_observation") or {}).get("ui", {})
+        self._update_object_seen_from_ui(ui)
+        info["object_seen"] = dict(self.object_seen)
         info.update(meta_flags)
          
         reward, done, reward_info = self._compute_step_reward(action_json, info, meta_flags)
@@ -321,7 +324,7 @@ class DiscoveryWorldEnv:
         }
 
     def _compute_ingame_process_reward(self, cur_score: float) -> float:
-        reward = (cur_score - self._prev_score) * 10
+        reward = cur_score - self._prev_score
         self._prev_score = cur_score
         return reward
 
@@ -349,20 +352,31 @@ class DiscoveryWorldEnv:
         return format_reward
 
     def _compute_expert_action_reward(self, action_json: Dict[str, Any], info: Dict[str, Any]) -> int:
+        reward = 0
         expert_action = self.rule_based_agent.select_action(info)
+        info["expert_action"] = expert_action
+        if not expert_action:
+            return reward
+        
         action_match = int(expert_action.get("action") == action_json.get("action"))
         if not action_match:
-            return 0
+            return reward
         
         arg1_match = 0
-        if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION", "PICKUP", "OPEN"}:
+        if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
              arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
              return arg1_match
+        
+        if action_match and expert_action.get("action") in {"PICKUP", "OPEN"}:
+             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
+             return arg1_match * 3.0
         
         arg_match = 0
         if action_match and expert_action.get("action") in {"PUT", "USE"}:
             arg_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")) and str(expert_action.get("arg2")) == str(action_json.get("arg2")))
-            return arg_match
+            return arg_match * 3.0
+        
+        return reward
 
     def _compute_repetition_penalty(self) -> float:
         if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
@@ -380,7 +394,8 @@ class DiscoveryWorldEnv:
         n = len(action_counts)
         uniform = torch.ones_like(probs) / n
         kl = -(probs * (torch.log(probs + 1e-8) - torch.log(uniform))).sum()
-        return torch.round(kl / 0.05) * 0.05
+        score = torch.round(kl / 0.05) * 0.05
+        return score.item()
 
     def _compute_step_reward(
         self,
@@ -399,30 +414,43 @@ class DiscoveryWorldEnv:
         format_reward = self._compute_format_reward(meta_flags)
         expert_action_reward = self._compute_expert_action_reward(action_json, info)
         repetition_penalty = self._compute_repetition_penalty()
+        hit_wall_penalty = self._compute_moving_error_penalty(action_json, self._last_action_result)
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
-        won_reward = 20.0 if info["won"] else 0.0
+        won_reward = 50.0 if info["won"] else 0.0
 
+        time_penalty = -0.05  # Small penalty to encourage faster solutions
         reward = (
-            + 0.05 * format_reward
+            0.05 * format_reward
             + 1.0 * expert_action_reward
-            + ingame_process_reward
+            + 50 * ingame_process_reward
             + stalling_penalty
             + won_reward
+            + hit_wall_penalty
+            + time_penalty
         )
 
         reward_info = {
+            "step_reward": reward,
             "ingame_process_reward": ingame_process_reward,
             "expert_action_reward": float(expert_action_reward),
             "format_reward": format_reward,
             "repetition_penalty": repetition_penalty,
             "new_action_bonus": new_action_bonus,
             "stalling_penalty": stalling_penalty,
+            "diversity_score": diversity_score,
+            "hit_wall_penalty": hit_wall_penalty,
             "won_reward": won_reward,
         }
 
         return reward, done, reward_info
+    
+    def _compute_moving_error_penalty(self, action_json, result):
+        if action_json.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
+            if not result.get("success"):
+                return -0.25
+        return 0.0
     
     def get_inventory_objects(self, info):
         ui = info.get("raw_observation").get("ui")

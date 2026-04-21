@@ -398,15 +398,13 @@ class TrajectoryCollector:
                     row = {
                         "rollout_step": int(_step),
                         "env_index": int(i),
-                        "uid": str(uid_batch[i]) if i < len(uid_batch) else "",
-                        "traj_uid": str(traj_uid[i]) if i < len(traj_uid) else "",
-                        "active": bool(active_masks[i]) if i < len(active_masks) else True,
                         "reward": float(_rewards[i]) if i < len(_rewards) else None,
                         "done": bool(_dones[i]) if i < len(_dones) else False,
                         "prompt": _truncate(prompt_text if prompt_text is None else str(prompt_text)),
                         "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
                         "projected_action": str(info_i.get("projected_action", "")),
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
+                        "expert_action": json.dumps(info_i.get("expert_action"), default=str),
                         "info_json": _truncate(json.dumps(info_i, ensure_ascii=False, default=str)),
                     }
                     llm_step_rows.append(row)
@@ -612,6 +610,7 @@ class TrajectoryCollector:
                         "llm_output",
                         "projected_action",
                         "is_action_valid",
+                        "expert_action",
                         "info_json",
                     ]
                     table = wandb.Table(columns=columns)
@@ -629,6 +628,7 @@ class TrajectoryCollector:
                             r.get("llm_output"),
                             r.get("projected_action"),
                             r.get("is_action_valid"),
+                            r.get("expert_action"),
                             r.get("info_json"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))

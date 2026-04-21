@@ -67,6 +67,9 @@ class RulebasedAgent:
             
             if KEY_NO_RUST in inv_objects and location == (21, 12):
                 return self.action_space["move_south"]
+            
+            if not inv_objects and location in [(18, 12), (19, 12), (20, 12), (21, 12), (22, 12)]:
+                return self.action_space["move_west"]
 
         elif inv_objects and not accessible_objects:
             
@@ -90,11 +93,5 @@ class RulebasedAgent:
         elif not inv_objects and not accessible_objects:
             if location == (17, 12):
                 return self.action_space["rotate_north"]
-            elif location == (18, 12):
-                return self.action_space["move_west"]
-            elif location == (19, 12):
-                return self.action_space["move_west"]
-            elif location == (20, 12):
-                return self.action_space["move_west"]
-            elif location == (21, 12):
+            elif location in [(18, 12), (19, 12), (20, 12), (21, 12), (22, 12)]:
                 return self.action_space["move_west"]
