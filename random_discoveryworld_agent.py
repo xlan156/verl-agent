@@ -98,6 +98,13 @@ def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     return out
 
 
+def simulate_llm_response_2():
+    with open("llm_response.txt", "r") as f:
+        response = f.read()
+    return response
+        
+
+
 def build_natural_response(info: Dict[str, Any]) -> str:
     """Generate natural language that mentions directions or object names."""
     object_seen = info.get("object_seen") or {}
@@ -151,7 +158,8 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
                     # 给一个占位字符串；projection 会用记忆/默认动作兜底
                     text_actions.append("done")
                 else:
-                    response = simulate_llm_response(observations["text"][i], infos[i])
+                    #response = simulate_llm_response(observations["text"][i], infos[i])
+                    response = simulate_llm_response_2()
                     text_actions.append(response)
 
             print(f"Step {step_idx:02d} fakeLLM: {response}")

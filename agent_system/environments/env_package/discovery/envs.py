@@ -86,6 +86,9 @@ class DiscoveryWorldEnv:
     def init_reward_shaping(self):
         self.action_history: List[Optional[str]] = []
         self.action_counter = defaultdict(int)
+        for action in {"MOVE_DIRECTION", "ROTATE_DIRECTION", "PICKUP", "OPEN", "USE", "PUT"}:
+            self.action_counter[action] = 0
+        
         self.object_seen: Dict[str, str] = {}
         self._object_name_counts = defaultdict(int)
         self.location_history: List[Tuple[Optional[int], Optional[int]]] = []
@@ -329,7 +332,7 @@ class DiscoveryWorldEnv:
         return reward
 
     def _compute_new_action_bonus(self, action_name: Optional[str], is_valid: int) -> float:
-        if not action_name or not is_valid:
+        if not action_name:
             return 0.0
         self.action_counter[action_name] += 1
         if self.action_counter[action_name] == 1:
@@ -365,7 +368,7 @@ class DiscoveryWorldEnv:
         arg1_match = 0
         if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
              arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
-             return arg1_match
+             return 0.2 * arg1_match
         
         if action_match and expert_action.get("action") in {"PICKUP", "OPEN"}:
              arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
@@ -386,12 +389,9 @@ class DiscoveryWorldEnv:
     def action_diversity_score(self):
         if not self.action_history:
             return 0.0
-        action_counts = defaultdict(int)
-        for act in self.action_history:
-            action_counts[act] += 1
-        total = sum(action_counts.values())
-        probs = torch.tensor([count / total for count in action_counts.values()])
-        n = len(action_counts)
+        total = sum(self.action_counter.values())
+        probs = torch.tensor([count / total for count in self.action_counter.values()])
+        n = len(self.action_counter)
         uniform = torch.ones_like(probs) / n
         kl = -(probs * (torch.log(probs + 1e-8) - torch.log(uniform))).sum()
         score = torch.round(kl / 0.05) * 0.05
@@ -425,6 +425,8 @@ class DiscoveryWorldEnv:
             0.05 * format_reward
             + 1.0 * expert_action_reward
             + 50 * ingame_process_reward
+            + new_action_bonus
+            + 0.5 *diversity_score
             + stalling_penalty
             + won_reward
             + hit_wall_penalty

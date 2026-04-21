@@ -27,13 +27,13 @@ GENERIC_RE = re.compile(r"```(.*?)```", re.DOTALL)
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 _OBJECT_ACTION_PATTERNS = [
-    (re.compile(r"\bwash\b|\brinse\b|\bclean\b", re.IGNORECASE), "USE"),
+    (re.compile(r"\bwash\b|\brinse\b|\bclean\b|\buse\b", re.IGNORECASE), "USE"),
     (re.compile(r"\bpick(?:\s+up)?\b|\btake\b", re.IGNORECASE), "PICKUP"),
     (re.compile(r"\bopen\b", re.IGNORECASE), "OPEN"),
     (re.compile(r"\buse\b", re.IGNORECASE), "USE"),
     (re.compile(r"\bput\b|\bplace\b", re.IGNORECASE), "PUT"),
-    (re.compile(r"\bmove\b|\bgo\b|\bwalk\b|\bstep\b", re.IGNORECASE), "MOVE_DIRECTION"),
-    (re.compile(r"\brotate\b|\bturn\b|\bface\b", re.IGNORECASE), "ROTATE_DIRECTION"),
+    (re.compile(r"\bmove\b|\bgo\b|\bwalk\b|\bstep\b|\bmove_direction\b", re.IGNORECASE), "MOVE_DIRECTION"),
+    (re.compile(r"\brotate\b|\bturn\b|\bface\b|\brotate_direction\b", re.IGNORECASE), "ROTATE_DIRECTION"),
 ]
 
 _DEFAULT_SAFE_ACTION = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"}, separators=(",", ":"))
@@ -385,6 +385,7 @@ def _collect_valid_uuids(info: Dict[str, Any]) -> List[str]:
 
 def _select_candidate_text(action_text: str, re_action_block: re.Pattern) -> str:
     m = re_action_block.search(action_text)
+    print(m)
     if not m:
         braced = _extract_last_braced_object(action_text)
         if braced is not None:
@@ -579,8 +580,9 @@ def discoveryworld_projection(
             candidate_text,
             object_seen,
         )
+        print(candidate_action)
         if candidate_action is None:
-            candidate_action = _fallback_candidate_action(original, object_seen)
+            candidate_action = _fallback_candidate_action(candidate_text, object_seen)
 
         if parsed is not None:
             are_json_format[i] = 1
