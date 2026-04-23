@@ -158,8 +158,8 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
                     # 给一个占位字符串；projection 会用记忆/默认动作兜底
                     text_actions.append("done")
                 else:
-                    #response = simulate_llm_response(observations["text"][i], infos[i])
-                    response = simulate_llm_response_2()
+                    response = simulate_llm_response(observations["text"][i], infos[i])
+                    #response = simulate_llm_response_2()
                     text_actions.append(response)
 
             print(f"Step {step_idx:02d} fakeLLM: {response}")

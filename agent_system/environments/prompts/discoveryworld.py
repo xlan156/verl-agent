@@ -16,55 +16,69 @@
 # --------------------- DiscoveryWorld --------------------- #
 
 DISCOVERYWORLD_TEMPLATE_NO_HIS = """
-You are an expert autonomous agent operating in the DiscoveryWorld environment.
+[GOAL]
+You are an expert agent in a room with a rusted key and a locked door.
+You need to 
+1. Pick up the key and put it in the jar.
+2. Use dispensers to derust the key.
+3. Open the door and exit.
 
-Your task is:
-{task_description}
+[HINT]
+In this task, try one chemical at a time:
+1. Move to the key, pick it up, and put it in the jar
+2. Move to a dispenser, use it on the jar, and check the result
+3. If the key is still rusted, clean the jar and try another chemical
+4. Once the key is derusted, move to the door and open it.
 
-Below is the current state of the world from the agent's perspective:
-{ui_json}
+[STATE]
+{step_info}
+{state_obs}
 
-NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
-NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
-If there is no accessible object in your current location or facing direction, you are encouraged to move or rotate to explore more areas to find accessible objects.
-When you encounter accessible objects in observation, you can choose to interact with them using PICKUP, PUT, OPEN, or USE actions.
+[VALID ACTIONS]
+MOVE_DIRECTION: {{east, west, north, south}}
+ROTATE_DIRECTION: {{east, west, north, south}}
+PICKUP: {{key, jar}}
+PUT: (key -> jar)
+USE: (Dispenser A | B | C | D -> jar), (Bottle Cleaner -> jar)
+OPEN: door
 
-You can now take your action using the following JSON format:
-{{"action": action_name, "arg1": item, "arg2": item}}
-
-1. First, think step by step about the current state, task, and which action will be required to reach some intermediate goals and then final goal. This reasoning MUST be enclosed within <think> </think> tags.
-   
-2. After finishing your reasoning, output a single action {{"action": action_name, "arg1": item, "arg2": item}} inside <action> </action>
-   tags. Do not output multiple actions.
+[OUTPUT FORMAT]
+Select the best action using the format:
+<action> {{"action": "...", "arg1": "...", "arg2": "..."}} </action>
 """
 
 
 DISCOVERYWORLD_TEMPLATE = """
-You are an expert autonomous agent operating in the DiscoveryWorld environment.
+[GOAL]
+You are an expert agent in a room with a rusted key and a locked door.
+You need to 
+1. Pick up the key and put it in the jar.
+2. Use dispensers to derust the key.
+3. Open the door and exit.
 
-Your task is:
-{task_description}
+[HINT]
+In this task, try one chemical at a time:
+1. Move to the key, pick it up, and put it in the jar
+2. Move to a dispenser, use it on the jar, and check the result
+3. If the key is still rusted, clean the jar and try another chemical
+4. Once the key is derusted, move to the door and open it.
 
-You are now at step {current_step}.
-Below is the current state of the world from the agent's perspective:
-{ui_json}
+[STATE]
+{step_info}
+{state_obs}
 
-So far you have taken a total of {step_count} step(s). Below are the most recent
-{history_length} observation–action pairs that summarize your interaction history:
+[MEMORY]
+{memory_context}
 
-{action_history}
+[VALID ACTIONS]
+MOVE_DIRECTION: {{east, west, north, south}}
+ROTATE_DIRECTION: {{east, west, north, south}}
+PICKUP: {{key, jar}}
+PUT: (key -> jar)
+USE: (Dispenser A | B | C | D -> jar), (Bottle Cleaner -> jar)
+OPEN: door
 
-NOTE: action_name can be one of MOVE_DIRECTION, ROTATE_DIRECTION, PICKUP, PUT, OPEN, USE. Action USE and PUT needs two arguments, others only need one.
-NOTE: When you want to move or rotate, you can use MOVE_DIRECTION or ROTATE_DIRECTION, and provide the direction (north, east, south, west) as arg1.
-If there is no accessible object in your current location or facing direction, you are encouraged to move or rotate to explore more areas to find accessible objects.
-When you encounter accessible objects in observation, you can choose to interact with them using PICKUP, PUT, OPEN, or USE actions.
-
-You can now take your action using the following JSON format:
-{{"action": action_name, "arg1": item, "arg2": item}}
-
-1. First, think step by step about the current state, task, and which action will be required to reach some intermediate goals and then final goal. This reasoning MUST be enclosed within <think> </think> tags.
-   
-2. After finishing your reasoning, output a single action {{"action": action_name, "arg1": item, "arg2": item}} inside <action> </action>
-   tags. Do not output multiple actions.
-
+[OUTPUT FORMAT]
+Select the best action using the format:
+<action> {{"action": "...", "arg1": "...", "arg2": "..."}} </action>
 """

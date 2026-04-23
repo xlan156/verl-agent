@@ -1,4 +1,4 @@
-from agent_system.environments.env_package.discovery.actions import all_action_abbr
+from agent_system.environments.env_package.discovery.helpers import all_action_abbr
 
 DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
 RUSTED_KEY = "rusted key (heavily rusted)"

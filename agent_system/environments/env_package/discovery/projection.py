@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import DiscoveryWorldAPI
-from agent_system.environments.env_package.discovery.actions import all_plausible_action_mapper
+from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper
 
 AVAILABLE_ACTIONS = DiscoveryWorldAPI.listKnownActionsStatic()
 
@@ -36,6 +36,7 @@ _OBJECT_ACTION_PATTERNS = [
     (re.compile(r"\brotate\b|\bturn\b|\bface\b|\brotate_direction\b", re.IGNORECASE), "ROTATE_DIRECTION"),
 ]
 
+INVALID_MESSAGE = "Invalid action or argument"
 _DEFAULT_SAFE_ACTION = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"}, separators=(",", ":"))
 
 
@@ -497,18 +498,18 @@ def _pack_action_result(
     valid_uuids: List[str],
 ) -> Tuple[int, str]:
     if candidate_action is None:
-        return 0, _DEFAULT_SAFE_ACTION
+        return 0, INVALID_MESSAGE
 
     action_name = candidate_action.get("action")
     if action_name in _MOVE_ROTATE_ACTIONS and candidate_action.get("arg1") not in _DIRECTIONS:
-        return 0, _DEFAULT_SAFE_ACTION
+        return 0, INVALID_MESSAGE
     if action_name in _SINGLE_OBJECT_ACTIONS and candidate_action.get("arg1") not in valid_uuids:
-        return 0, json.dumps(candidate_action)
+        return 0, INVALID_MESSAGE
     if action_name in _DOUBLE_OBJECT_ACTIONS and (
         candidate_action.get("arg1") not in valid_uuids
         or candidate_action.get("arg2") not in valid_uuids
     ):
-        return 0, json.dumps(candidate_action)
+        return 0, INVALID_MESSAGE
 
     return 1, json.dumps(candidate_action, separators=(",", ":"))
 

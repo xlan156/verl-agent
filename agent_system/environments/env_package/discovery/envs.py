@@ -13,6 +13,7 @@ from agent_system.environments.env_package.discovery.discoveryworld.discoverywor
     DiscoveryWorldAPI,
 )
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgent
+from agent_system.environments.env_package.discovery.projection import INVALID_MESSAGE
 
 
 def _slugify(value: Optional[str]) -> str:
@@ -198,23 +199,13 @@ class DiscoveryWorldEnv:
         
         # 4. Nearby Objects (only interesting objects within certain steps, grouped by direction)
         nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
-        nearby_summary = {}
-        
+        lines.append("Nearby objects:")
         for direction, objects in nearby.items():
             # Only include objects within distance 1 and skip floor/wall/grass
-            nearby_objects = []
             for obj in objects:
                 distance = obj.get("distance", 99)
                 if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES:
-                    nearby_objects.append(f"{obj.get('name', 'unknown')} (distance={distance})")
-            if nearby_objects:
-                nearby_summary[direction] = nearby_objects
-        
-        if nearby_summary:
-            # Keep concise while exposing compass directions
-            lines.append("\nNearby (at most 2 tiles away):")
-            for direction, objects in sorted(nearby_summary.items()):
-                lines.append(f"{direction}: {', '.join(objects)}")
+                    lines.append(f"- {direction} ({distance}): {obj.get('name', 'unknown')}")
         
         # 5. Nearby Agents (only if non-empty and has actions)
         nearby_agents = ui_obs.get("nearbyAgents", {}).get("list_of_agents", {})
@@ -276,6 +267,20 @@ class DiscoveryWorldEnv:
     def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
         assert self._api is not None
 
+        if isinstance(action, str) and action.strip() == INVALID_MESSAGE:
+            self._last_action_result = {"success": False, "message": INVALID_MESSAGE}
+            self.action_history.append("INVALID")
+            self._steps += 1
+
+            text_obs, info = self._format_obs_and_info()
+            ui = (info.get("raw_observation") or {}).get("ui", {})
+            self._update_object_seen_from_ui(ui)
+            info["object_seen"] = dict(self.object_seen)
+
+            done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
+            info["won"] = bool(self._api.areTasksComplete())
+            return text_obs, -1.0, done, info
+
         action_json = self._parse_action(action)
         meta_flags = self._extract_meta_flags(action_json)
 
@@ -331,17 +336,9 @@ class DiscoveryWorldEnv:
         self._prev_score = cur_score
         return reward
 
-    def _compute_new_action_bonus(self, action_name: Optional[str], is_valid: int) -> float:
-        if not action_name:
-            return 0.0
-        self.action_counter[action_name] += 1
-        if self.action_counter[action_name] == 1:
-            return 0.1
-        return 0.0
-
     def _compute_stalling_penalty(self) -> float:
         if len(self.location_history) >= 5 and set(self.location_history[-5:]) == {self.location_history[-1]}:
-            return -0.5
+            return -1.0
         return 0.0
 
     def _compute_format_reward(self, meta_flags: Dict[str, int]) -> float:
@@ -359,44 +356,67 @@ class DiscoveryWorldEnv:
         expert_action = self.rule_based_agent.select_action(info)
         info["expert_action"] = expert_action
         if not expert_action:
+            # Record the observation for debugging if no expert action is returned
+            with open("observation_for_rule_based_agent.json", "a") as f:
+                ui = info.get("raw_observation", {}).get("ui", {})
+                obs_for_agent = self.compress_ui_observation(ui)
+                f.write(json.dumps({"compressed_obs": obs_for_agent}) + "\n")
             return reward
         
         action_match = int(expert_action.get("action") == action_json.get("action"))
         if not action_match:
             return reward
         
-        arg1_match = 0
         if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
              arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
-             return 0.2 * arg1_match
+             return 0.1 * arg1_match
         
         if action_match and expert_action.get("action") in {"PICKUP", "OPEN"}:
-             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
-             return arg1_match * 3.0
-        
-        arg_match = 0
+            reward += 0.1
+            arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
+            return reward + 0.2 * arg1_match
+
         if action_match and expert_action.get("action") in {"PUT", "USE"}:
-            arg_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")) and str(expert_action.get("arg2")) == str(action_json.get("arg2")))
-            return arg_match * 3.0
+            reward += 0.1
+            arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
+            arg2_match = int(str(expert_action.get("arg2")) == str(action_json.get("arg2")))
+            return reward + 0.2 * arg1_match + 0.2 * arg2_match
         
         return reward
 
     def _compute_repetition_penalty(self) -> float:
         if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
-            return -0.5
+            return -1.0
         return 0.0
     
-    def action_diversity_score(self):
+    def _recent_action_entropy(self):
         if not self.action_history:
             return 0.0
-        total = sum(self.action_counter.values())
-        probs = torch.tensor([count / total for count in self.action_counter.values()])
-        n = len(self.action_counter)
-        uniform = torch.ones_like(probs) / n
-        kl = -(probs * (torch.log(probs + 1e-8) - torch.log(uniform))).sum()
-        score = torch.round(kl / 0.05) * 0.05
-        return score.item()
-
+        
+        n = len(self.action_history)
+        n = max(n, 6)
+        counts = defaultdict(int)
+        for action in self.action_history[-n:]:
+            counts[action] += 1
+        probs = torch.tensor([count / n for count in counts.values()])
+        entropy = -(probs * torch.log(probs + 1e-8)).sum()
+        max_entropy = torch.log(torch.tensor(len(counts), dtype=torch.float))
+        
+        decay = max(0.0, 1.0 - self._steps / self._max_steps)
+        norm_entropy = entropy / (max_entropy + 1e-8) * decay
+        
+        return norm_entropy.item()
+    
+    def _compute_moving_error_penalty(self, action_json, result):
+        if action_json.get("action") in {"MOVE_DIRECTION"}:
+            if not result.get("success"):
+                return -0.1
+        return 0.0
+        
+    def clip_reward(self, reward):
+        clipped = max(-1.5, min(1.5, reward))
+        return clipped
+    
     def _compute_step_reward(
         self,
         action_json: Dict[str, Any],
@@ -405,11 +425,7 @@ class DiscoveryWorldEnv:
     ) -> Tuple[float, bool, Dict[str, float]]:
         cur_score = float(info.get("score_normalized", 0.0))
         ingame_process_reward = self._compute_ingame_process_reward(cur_score)
-        new_action_bonus = self._compute_new_action_bonus(
-            action_json.get("action"),
-            meta_flags.get("is_valid", 0),
-        )
-        diversity_score = self.action_diversity_score()
+        recent_action_entropy = self._recent_action_entropy()
         stalling_penalty = self._compute_stalling_penalty()
         format_reward = self._compute_format_reward(meta_flags)
         expert_action_reward = self._compute_expert_action_reward(action_json, info)
@@ -418,20 +434,22 @@ class DiscoveryWorldEnv:
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
-        won_reward = 50.0 if info["won"] else 0.0
+        won_reward = 20.0 if info["won"] else 0.0
 
-        time_penalty = -0.05  # Small penalty to encourage faster solutions
+        time_penalty = -0.02  # Small penalty to encourage faster solutions
         reward = (
-            0.05 * format_reward
-            + 1.0 * expert_action_reward
-            + 50 * ingame_process_reward
-            + new_action_bonus
-            + 0.5 *diversity_score
-            + stalling_penalty
+            0.1 * format_reward
+            + expert_action_reward
+            + 5.0 * ingame_process_reward
+            + 0.1 * recent_action_entropy
             + won_reward
+            + stalling_penalty
             + hit_wall_penalty
             + time_penalty
         )
+        
+        if ingame_process_reward == 0 and won_reward == 0:
+            reward = self.clip_reward(reward)
 
         reward_info = {
             "step_reward": reward,
@@ -439,53 +457,13 @@ class DiscoveryWorldEnv:
             "expert_action_reward": float(expert_action_reward),
             "format_reward": format_reward,
             "repetition_penalty": repetition_penalty,
-            "new_action_bonus": new_action_bonus,
             "stalling_penalty": stalling_penalty,
-            "diversity_score": diversity_score,
+            "diversity_score": recent_action_entropy,
             "hit_wall_penalty": hit_wall_penalty,
             "won_reward": won_reward,
         }
 
         return reward, done, reward_info
-    
-    def _compute_moving_error_penalty(self, action_json, result):
-        if action_json.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
-            if not result.get("success"):
-                return -0.25
-        return 0.0
-    
-    def get_inventory_objects(self, info):
-        ui = info.get("raw_observation").get("ui")
-        inventory_objects = ui.get("inventoryObjects", [])
-        return inventory_objects
-        
-    def get_accessible_objects(self, info):
-        ui = info.get("raw_observation").get("ui")
-        accessible_objects = ui.get("accessibleEnvironmentObjects", [])
-        return accessible_objects
-    
-    def correct_object_reward(self, action_json, info):
-        """Give a small reward if the agent interacts with an accessible object."""
-        accessible_objects = self.get_accessible_objects(info)
-        accessible_uuids = {obj.get("uuid") for obj in accessible_objects}
-        inventory_objects = self.get_inventory_objects(info)
-        inventory_uuids = {obj.get("uuid") for obj in inventory_objects}
-        
-        all_accessible_uuids = accessible_uuids.union(inventory_uuids)
-        
-        if action_json.get("action") in {"PICKUP"}:
-            if action_json.get("arg1") in accessible_uuids:
-                return 1
-        
-        if action_json.get("action") in {"PUT", "USE"}:
-            if action_json.get("arg1") in inventory_uuids and action_json.get("arg2") in all_accessible_uuids:
-                return 1
-
-        return 0
-    
-    def clip_reward(self, reward):
-        clipped = max(-1.0, min(1.0, reward))
-        return clipped
 
 
 class DiscoveryWorldWorker:

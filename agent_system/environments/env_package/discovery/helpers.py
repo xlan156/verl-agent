@@ -35,6 +35,25 @@ all_plausible_action_mapper = {
     "Open the door": {"action": "OPEN", "arg1": "18573"},
 }
 
+all_plausible_action_mapper_no_uuid = {
+    "Move west": {"action": "MOVE_DIRECTION", "arg1": "west"},
+    "Move east": {"action": "MOVE_DIRECTION", "arg1": "east"},
+    "Move south": {"action": "MOVE_DIRECTION", "arg1": "south"},
+    "Rotate north": {"action": "ROTATE_DIRECTION", "arg1": "north"},
+    "Rotate east": {"action": "ROTATE_DIRECTION", "arg1": "east"},
+    "Rotate south": {"action": "ROTATE_DIRECTION", "arg1": "south"},
+    "Rotate west": {"action": "ROTATE_DIRECTION", "arg1": "west"},
+    "Pick up the key": {"action": "PICKUP", "arg1": "key"},
+    "Put the key in the jar": {"action": "PUT", "arg1": "key", "arg2": "jar"},
+    "Pick up the jar": {"action": "PICKUP", "arg1": "jar"},
+    "Use the dispenser A to deliver substance A to the jar": {"action": "USE", "arg1": "dispenser A", "arg2": "jar"},
+    "Use the dispenser B to deliver substance B to the jar": {"action": "USE", "arg1": "dispenser B", "arg2": "jar"},
+    "Use the dispenser C to deliver substance C to the jar": {"action": "USE", "arg1": "dispenser C", "arg2": "jar"},
+    "Use the dispenser D to deliver substance D to the jar": {"action": "USE", "arg1": "dispenser D", "arg2": "jar"},
+    "Wash the jar to clean substances": {"action": "USE", "arg1": "bottle_cleaner", "arg2": "jar"},
+    "Open the door": {"action": "OPEN", "arg1": "door"},
+}
+
 all_action_abbr = {
     "move_west": {"action": "MOVE_DIRECTION", "arg1": "west"},
     "move_east": {"action": "MOVE_DIRECTION", "arg1": "east"},
@@ -53,4 +72,15 @@ all_action_abbr = {
     "use_dispenser_D": {"action": "USE", "arg1": "55934", "arg2": "35632"},
     "wash": {"action": "USE", "arg1":"51739", "arg2":"35632"},
     "open_door": {"action": "OPEN", "arg1": "18573"},
+}
+
+uuid_to_name = {
+    "33120": "Key",
+    "35632": "Jar",
+    "21559": "Dispenser A",
+    "57736": "Dispenser B",
+    "8549": "Dispenser C",
+    "55934": "Dispenser D",
+    "51739": "Bottle Cleaner",
+    "18573": "Door",
 }

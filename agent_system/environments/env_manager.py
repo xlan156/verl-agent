@@ -27,7 +27,7 @@ from omegaconf import OmegaConf
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
-from agent_system.environments.env_package.discovery.actions import all_plausible_action_mapper
+from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper
 
 
 _ACTION_META_RE = re.compile(r"\s*,?\s*\"__meta\"\s*:\s*\{[^{}]*\}")
@@ -632,6 +632,11 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
+        from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper_no_uuid, uuid_to_name
+        from agent_system.environments.env_package.discovery.projection import INVALID_MESSAGE
+        self.uuid_to_name = uuid_to_name
+        self.all_actions = all_plausible_action_mapper_no_uuid
+        self.invalid_message = INVALID_MESSAGE
 
     def reset(self, kwargs):
         text_obs, infos = self.envs.reset()
@@ -682,7 +687,30 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
-        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        actions_to_store = []
+        for a in actions:
+            action_processed = None
+            if a == self.invalid_message:
+                action_processed = "The action was invalid, please try again."
+                actions_to_store.append(action_processed)
+                continue
+
+            a = json.loads(a)
+            if a.get("action") in ["PICKUP", "OPEN"]:
+                arg_name = self.uuid_to_name.get(a.get("arg1"), "null")
+                action_processed = {"action": a.get("action"), "arg1": arg_name}
+            
+            if a.get("action") in ["PUT", "USE"]:
+                arg_name = self.uuid_to_name.get(a.get("arg1"), "null")
+                arg2_name = self.uuid_to_name.get(a.get("arg2"), "null")
+                action_processed = {"action": a.get("action"), "arg1": arg_name, "arg2": arg2_name}
+            
+            if action_processed:
+                actions_to_store.append(json.dumps(action_processed))
+            else:
+                actions_to_store.append(json.dumps(a))
+
+        self.memory.store({"text_obs": self.pre_text_obs, "action": actions_to_store})
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
@@ -729,34 +757,27 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             #filtered_actions = self.filter_plausible_actions(infos[i])
             #filtered_actions = "\n".join(f"{a}" for a in filtered_actions)
 
-            ui_json = text_obs[i]
+            state_obs = text_obs[i]
             teleport_str = "\n".join(f"{loc}" for loc, _ in teleport_locs.items())
             last_result_str = json.dumps(last_result, indent=2, sort_keys=True) if last_result else "{}"
+            step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
 
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-                    task_description=task_desc,
-                    ui_json=ui_json,
-                    #action_options=filtered_actions,
-                    teleport_locations=teleport_str,
-                    last_action_result=last_result_str,
+                    state_obs=state_obs,
+                    step_info=step_info,
                 )
             else:
                 history_block = memory_contexts[i]
-                history_len = valid_lens[i]
 
                 history_block = _strip_action_meta(history_block)
+                #print(history_block)
+                #action_str_history = ""
 
                 obs = DISCOVERYWORLD_TEMPLATE.format(
-                    task_description=task_desc,
-                    step_count=len(self.memory[i]),
-                    history_length=history_len,
-                    action_history=history_block,
-                    current_step=len(self.memory[i]) + 1,
-                    ui_json=ui_json,
-                    #action_options=filtered_actions,
-                    teleport_locations=teleport_str,
-                    last_action_result=last_result_str,
+                    state_obs=state_obs,
+                    step_info=step_info,
+                    memory_context=history_block,
                 )
 
             postprocess_text_obs.append(obs)

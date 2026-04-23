@@ -75,6 +75,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
+    actor_rollout_ref.rollout.temperature=0.8 \
+    actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
@@ -107,6 +109,6 @@ python3 -m verl.trainer.main_ppo \
     trainer.log_llm_steps=True \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=50 \
+    trainer.total_epochs=30 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"

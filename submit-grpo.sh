@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
-#SBATCH --time=5:00:00
+#SBATCH --time=4:00:00
 #SBATCH --output=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
@@ -31,13 +31,15 @@ SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
 num_cpus_per_env_worker=0.2 # CPU per DiscoveryWorld env worker; reduce to save CPU.
-train_data_size=8 # number of parallel tasks (matches other PPO examples)
+train_data_size=6 # number of parallel tasks (matches other PPO examples)
 val_data_size=1
 # CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
 model_name=Qwen2.5-0.5B-Instruct
 export MODEL_NAME="$model_name"
 
+experiment_name="GRPO_${model_name}"
+group_size=4
 num_gpus_per_node=1
 
 # Data preparation: only indicates modality (text) and data size.
@@ -75,8 +77,10 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
-    actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+    actor_rollout_ref.rollout.top_p=0.95 \
+    actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
@@ -85,6 +89,7 @@ python3 -m verl.trainer.main_ppo \
     env.env_name=discoveryworld \
     env.seed=0 \
     env.max_steps=50 \
+    env.rollout.n=$group_size \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.save_frames=True \
@@ -92,12 +97,12 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name='verl_agent_discoveryworld' \
-    trainer.experiment_name="GRPO_${model_name}" \
+    trainer.experiment_name="${experiment_name}_2" \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=50 \
+    trainer.total_epochs=30 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"
