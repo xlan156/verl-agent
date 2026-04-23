@@ -504,12 +504,12 @@ def _pack_action_result(
     if action_name in _MOVE_ROTATE_ACTIONS and candidate_action.get("arg1") not in _DIRECTIONS:
         return 0, INVALID_MESSAGE
     if action_name in _SINGLE_OBJECT_ACTIONS and candidate_action.get("arg1") not in valid_uuids:
-        return 0, INVALID_MESSAGE
+        return 0, json.dumps(candidate_action, separators=(",", ":"))
     if action_name in _DOUBLE_OBJECT_ACTIONS and (
         candidate_action.get("arg1") not in valid_uuids
         or candidate_action.get("arg2") not in valid_uuids
     ):
-        return 0, INVALID_MESSAGE
+        return 0, json.dumps(candidate_action, separators=(",", ":"))
 
     return 1, json.dumps(candidate_action, separators=(",", ":"))
 

@@ -18,6 +18,7 @@ class RulebasedAgent:
         self.env = env
         self.action_space = all_action_abbr
         self.door_opened = False
+        self.is_key_in_jar = False
     
     def select_action(self, info):
 
@@ -41,6 +42,7 @@ class RulebasedAgent:
                 return self.action_space["pickup_key"]
             
             if JAR in accessible_objects and RUSTED_KEY in inv_objects:
+                self.is_key_in_jar = True
                 return self.action_space["put_key"]
             
             if KEY_NO_RUST in accessible_objects:
@@ -73,8 +75,24 @@ class RulebasedAgent:
 
         elif inv_objects and not accessible_objects:
             
-            if RUSTED_KEY in inv_objects and not JAR in inv_objects and location == (18, 12):
-                return self.action_space["move_west"]
+            if RUSTED_KEY in inv_objects and not JAR in inv_objects:
+                if location == (17, 12):
+                    if facing != "north":
+                        return self.action_space["rotate_north"]
+                    else:
+                        return self.action_space["pickup_jar"]
+                elif location in [(18, 12), (19, 12), (20, 12), (21, 12), (22, 12)]:
+                    return self.action_space["move_west"]
+            
+            elif JAR in inv_objects and not RUSTED_KEY in inv_objects and not KEY_NO_RUST in inv_objects:
+                if location == (17, 12):
+                    return self.action_space["pickup_key"]
+                elif location in [(18, 12), (19, 12), (20, 12), (21, 12), (22, 12)]:
+                    return self.action_space["move_west"]
+            
+            elif RUSTED_KEY in inv_objects and JAR in inv_objects and not self.is_key_in_jar:
+                self.is_key_in_jar = True
+                return self.action_space["put_key"]
             
             elif RUSTED_KEY in inv_objects and location == (17, 12) and not facing == "north":
                 return self.action_space["rotate_north"]

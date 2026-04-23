@@ -35,16 +35,16 @@ In this task, try one chemical at a time:
 {state_obs}
 
 [VALID ACTIONS]
-MOVE_DIRECTION: {{east, west, north, south}}
-ROTATE_DIRECTION: {{east, west, north, south}}
-PICKUP: {{key, jar}}
-PUT: (key -> jar)
-USE: (Dispenser A | B | C | D -> jar), (Bottle Cleaner -> jar)
-OPEN: door
+MOVE_DIRECTION: arg1 (one of): {{east, west, north, south}}
+ROTATE_DIRECTION: arg1 (one of): {{north, south}}
+PICKUP: arg1 (one of): {{key, jar}}
+PUT: arg1: key, arg2: jar
+USE: arg1 (one of): {{Dispenser A, Dispenser B, Dispenser C, Dispenser D, Bottle Cleaner}}, arg2: jar)
+OPEN: arg1: door
 
 [OUTPUT FORMAT]
-Select the best action using the format:
-<action> {{"action": "...", "arg1": "...", "arg2": "..."}} </action>
+Select the best action using the JSON format:
+<action> {{"action": "...", "arg1": "...", "arg2"(if needed): "..."}} </action>
 """
 
 
@@ -71,14 +71,14 @@ In this task, try one chemical at a time:
 {memory_context}
 
 [VALID ACTIONS]
-MOVE_DIRECTION: {{east, west, north, south}}
-ROTATE_DIRECTION: {{east, west, north, south}}
-PICKUP: {{key, jar}}
-PUT: (key -> jar)
-USE: (Dispenser A | B | C | D -> jar), (Bottle Cleaner -> jar)
-OPEN: door
+MOVE_DIRECTION: arg1 (one of): {{east, west, north, south}}
+ROTATE_DIRECTION: arg1 (one of): {{north, south}}
+PICKUP: arg1 (one of): {{key, jar}}
+PUT: arg1: key, arg2: jar
+USE: arg1 (one of): {{Dispenser A, Dispenser B, Dispenser C, Dispenser D, Bottle Cleaner}}, arg2: jar)
+OPEN: arg1: door
 
 [OUTPUT FORMAT]
-Select the best action using the format:
-<action> {{"action": "...", "arg1": "...", "arg2": "..."}} </action>
+Select the best action using the JSON format:
+<action> {{"action": "...", "arg1": "...", "arg2"(if needed): "..."}} </action>
 """

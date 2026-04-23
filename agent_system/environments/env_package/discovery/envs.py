@@ -160,6 +160,10 @@ class DiscoveryWorldEnv:
             for obj in objects or []:
                 if obj.get("name") not in IGNORED_OBJECT_NAMES:
                     self._record_object_seen(obj.get("name"), obj.get("uuid"))
+    
+    def _update_location_history(self, ui: Dict[str, Any]) -> None:
+        location = (ui.get("agentLocation", {}).get("x"), ui.get("agentLocation", {}).get("y"))
+        self.location_history.append(location)
 
     @staticmethod
     def compress_ui_observation(ui_obs: dict) -> str:
@@ -261,7 +265,7 @@ class DiscoveryWorldEnv:
         self._prev_score = float(info.get("score_normalized", 0.0))
         
         if not self.location_history:
-            self.location_history.append((ui.get("agentLocation", {}).get("x"), ui.get("agentLocation", {}).get("y")))
+            self._update_location_history(ui)
         return text_obs, info
 
     def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
@@ -275,6 +279,7 @@ class DiscoveryWorldEnv:
             text_obs, info = self._format_obs_and_info()
             ui = (info.get("raw_observation") or {}).get("ui", {})
             self._update_object_seen_from_ui(ui)
+            self._update_location_history(ui)
             info["object_seen"] = dict(self.object_seen)
 
             done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
@@ -294,6 +299,7 @@ class DiscoveryWorldEnv:
         text_obs, info = self._format_obs_and_info()
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_object_seen_from_ui(ui)
+        self._update_location_history(ui)
         info["object_seen"] = dict(self.object_seen)
         info.update(meta_flags)
          
@@ -336,23 +342,30 @@ class DiscoveryWorldEnv:
         self._prev_score = cur_score
         return reward
 
-    def _compute_stalling_penalty(self) -> float:
+    def _compute_stalling_penalty(self, action_json: Dict[str, Any]) -> float:
+        penalty = 0.0
+        if action_json.get("action") in {"ROTATE_DIRECTION"}:
+            if action_json.get("arg1") in {"east", "west"}:
+                penalty -= 0.2
         if len(self.location_history) >= 5 and set(self.location_history[-5:]) == {self.location_history[-1]}:
-            return -1.0
-        return 0.0
+            penalty -= 0.2
+        return penalty
 
-    def _compute_format_reward(self, meta_flags: Dict[str, int]) -> float:
+    def _compute_format_reward(self, action_json: Dict[str, Any], meta_flags: Dict[str, int]) -> float:
         format_reward = 0.0
-        format_reward -= int(meta_flags.get("are_json_format", 0) == 0)
-        format_reward -= int(meta_flags.get("contain_think_block", 0) == 0)
+        format_reward += int(meta_flags.get("are_json_format", 0) == 1)
+        #format_reward -= int(meta_flags.get("contain_think_block", 0) == 0)
         format_reward -= int(meta_flags.get("contain_action_block", 0) == 0)
         format_reward -= int(meta_flags.get("action_multiple_actions", 0) == 1)
         format_reward -= int(meta_flags.get("think_has_chinese", 0) == 1)
-        format_reward -= int(meta_flags.get("is_valid", 0) == 0)
         return format_reward
 
     def _compute_expert_action_reward(self, action_json: Dict[str, Any], info: Dict[str, Any]) -> int:
         reward = 0
+        
+        if action_json.get("action") in {"PICKUP", "OPEN", "USE", "PUT"}:
+            reward += 1
+        
         expert_action = self.rule_based_agent.select_action(info)
         info["expert_action"] = expert_action
         if not expert_action:
@@ -368,19 +381,19 @@ class DiscoveryWorldEnv:
             return reward
         
         if action_match and expert_action.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"}:
-             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
-             return 0.1 * arg1_match
+            arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
+            return 1 * arg1_match
         
         if action_match and expert_action.get("action") in {"PICKUP", "OPEN"}:
-            reward += 0.1
+            reward += 1
             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
-            return reward + 0.2 * arg1_match
+            return reward + 2 * arg1_match
 
         if action_match and expert_action.get("action") in {"PUT", "USE"}:
-            reward += 0.1
+            reward += 1
             arg1_match = int(str(expert_action.get("arg1")) == str(action_json.get("arg1")))
             arg2_match = int(str(expert_action.get("arg2")) == str(action_json.get("arg2")))
-            return reward + 0.2 * arg1_match + 0.2 * arg2_match
+            return reward + 2 * arg1_match + 2 * arg2_match
         
         return reward
 
@@ -412,6 +425,35 @@ class DiscoveryWorldEnv:
             if not result.get("success"):
                 return -0.1
         return 0.0
+    
+    def _rare_action_reward(self, action_json):
+        self.used = False
+        self.put = False
+        self.open = False
+        self.pickedup = False
+        
+        reward = 0.0
+        if action_json.get("action") == "PICKUP" and not self.pickedup:
+            reward += 1
+
+        if action_json.get("action") == "USE" and not self.used:
+            reward += 1
+        
+        if action_json.get("action") == "PUT" and not self.put:
+            reward += 1
+        
+        if action_json.get("action") == "OPEN" and not self.open:
+            reward += 1
+        return reward
+    
+    def _invalid_action_penalty(self, action_json: Dict[str, Any], info: Dict[str, Any]) -> float:
+        if action_json.get("action") in {"PICKUP", "PUT", "USE", "OPEN"} and info.get("is_valid", 0) == 0:
+            return -0.1
+        elif action_json.get("action") in {"MOVE_DIRECTION", "ROTATE_DIRECTION"} and info.get("is_valid", 0) == 0:
+            return -0.5
+        elif info.get("is_valid", 0) == 0:
+            return -0.5
+        return 0.0
         
     def clip_reward(self, reward):
         clipped = max(-1.5, min(1.5, reward))
@@ -427,10 +469,12 @@ class DiscoveryWorldEnv:
         ingame_process_reward = self._compute_ingame_process_reward(cur_score)
         recent_action_entropy = self._recent_action_entropy()
         stalling_penalty = self._compute_stalling_penalty()
-        format_reward = self._compute_format_reward(meta_flags)
+        format_reward = self._compute_format_reward(action_json, meta_flags)
         expert_action_reward = self._compute_expert_action_reward(action_json, info)
+        rare_action_reward = self._rare_action_reward(action_json)
         repetition_penalty = self._compute_repetition_penalty()
         hit_wall_penalty = self._compute_moving_error_penalty(action_json, self._last_action_result)
+        invalid_penalty = self._invalid_action_penalty(action_json, info)
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
@@ -439,12 +483,14 @@ class DiscoveryWorldEnv:
         time_penalty = -0.02  # Small penalty to encourage faster solutions
         reward = (
             0.1 * format_reward
-            + expert_action_reward
-            + 5.0 * ingame_process_reward
-            + 0.1 * recent_action_entropy
+            + 0.5 * expert_action_reward
+            + 25.0 * ingame_process_reward
+            + 0.5 * rare_action_reward
             + won_reward
-            + stalling_penalty
-            + hit_wall_penalty
+            + 0.1 * repetition_penalty
+            + 0.3 * stalling_penalty
+            + 0.2 * hit_wall_penalty
+            + invalid_penalty
             + time_penalty
         )
         
