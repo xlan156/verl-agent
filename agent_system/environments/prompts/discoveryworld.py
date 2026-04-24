@@ -23,28 +23,28 @@ You need to
 2. Use dispensers to derust the key.
 3. Open the door and exit.
 
-[HINT]
-In this task, try one chemical at a time:
-1. Move to the key, pick it up, and put it in the jar
-2. Move to a dispenser, use it on the jar, and check the result
-3. If the key is still rusted, clean the jar and try another chemical
-4. Once the key is derusted, move to the door and open it.
-
 [STATE]
 {step_info}
 {state_obs}
 
-[VALID ACTIONS]
-MOVE_DIRECTION: arg1 (one of): {{east, west, north, south}}
-ROTATE_DIRECTION: arg1 (one of): {{north, south}}
-PICKUP: arg1 (one of): {{key, jar}}
-PUT: arg1: key, arg2: jar
-USE: arg1 (one of): {{Dispenser A, Dispenser B, Dispenser C, Dispenser D, Bottle Cleaner}}, arg2: jar)
-OPEN: arg1: door
+[OUTPUT]
+Return EXACTLY one of:
+move_to_key
+move_to_jar
+move_to_dispenser_A
+move_to_dispenser_B
+move_to_dispenser_C
+move_to_dispenser_D
+pick_up_key
+put_key_in_jar
+use_dispenser_A
+use_dispenser_B
+use_dispenser_C
+use_dispenser_D
+wash_jar
+open_door
 
-[OUTPUT FORMAT]
-Select the best action using the JSON format:
-<action> {{"action": "...", "arg1": "...", "arg2"(if needed): "..."}} </action>
+Do not output anything else.
 """
 
 
@@ -56,29 +56,29 @@ You need to
 2. Use dispensers to derust the key.
 3. Open the door and exit.
 
-[HINT]
-In this task, try one chemical at a time:
-1. Move to the key, pick it up, and put it in the jar
-2. Move to a dispenser, use it on the jar, and check the result
-3. If the key is still rusted, clean the jar and try another chemical
-4. Once the key is derusted, move to the door and open it.
-
 [STATE]
 {step_info}
 {state_obs}
 
 [MEMORY]
-{memory_context}
+{memory_actions}
 
-[VALID ACTIONS]
-MOVE_DIRECTION: arg1 (one of): {{east, west, north, south}}
-ROTATE_DIRECTION: arg1 (one of): {{north, south}}
-PICKUP: arg1 (one of): {{key, jar}}
-PUT: arg1: key, arg2: jar
-USE: arg1 (one of): {{Dispenser A, Dispenser B, Dispenser C, Dispenser D, Bottle Cleaner}}, arg2: jar)
-OPEN: arg1: door
+[OUTPUT]
+Return EXACTLY one of:
+move_to_key
+move_to_jar
+move_to_dispenser_A
+move_to_dispenser_B
+move_to_dispenser_C
+move_to_dispenser_D
+pick_up_key
+put_key_in_jar
+use_dispenser_A
+use_dispenser_B
+use_dispenser_C
+use_dispenser_D
+wash_jar
+open_door
 
-[OUTPUT FORMAT]
-Select the best action using the JSON format:
-<action> {{"action": "...", "arg1": "...", "arg2"(if needed): "..."}} </action>
+Do not output anything else.
 """

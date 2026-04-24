@@ -13,7 +13,7 @@ from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE,
 )
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-from agent_system.environments.env_package.discovery.projection import (
+from agent_system.environments.env_package.discovery.projection_old import (
     discoveryworld_projection,
 )
 from agent_system.memory import SimpleMemory

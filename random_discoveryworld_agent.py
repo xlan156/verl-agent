@@ -7,11 +7,6 @@ import ray
 from omegaconf import OmegaConf
 
 from agent_system.environments.env_manager import make_envs
-from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import (  # type: ignore
-    DiscoveryWorldAPI,
-)
-
-AVAILABLE_ACTIONS = DiscoveryWorldAPI.listKnownActionsStatic()
 
 def build_test_config(env_num: int = 1, max_steps: int = 30, seed: int = 0):
     """Minimal OmegaConf config so make_envs builds DiscoveryWorldEnvironmentManager."""
@@ -74,25 +69,10 @@ def sample_random_action(info: Dict[str, Any]) -> Dict[str, Any]:
 def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     """Simulate an LLM response: sometimes valid, sometimes malformed."""
     string_candidates = [
-        "OPEN_JAR",
-        "I choose to pick up the key",
-        "Use the substance A on the jar",
-        "move to the east",
-        "USE_SUBSTANCE ON JAR",
-        'USE("jar", "Substance A")',
-    ]
-    action_json_str = json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"})
-    action_json_str = "MOVE_DIRECTION, west"
-    
-    string_candidates = [
-        json.dumps({"action": "ROTATE_DIRECTION", "arg1": "north"}),
-        json.dumps({"action": "MOVE_DIRECTION", "arg1": "west"}),
-        json.dumps({"action": "MOVE_DIRECTION", "arg1": "east"}),
-        json.dumps({"action": "PICKUP", "arg1": "Key"}),
-        json.dumps({"action": "PUT", "arg1": "Key", "arg2": "Jar"}),
-        json.dumps({"action": "PICKUP", "arg1": "Jar"}),
-        json.dumps({"action": "USE", "arg1": "Dispenser B", "arg2": "Jar"}),
-        json.dumps({"action": "OPEN", "arg1": "Door"}),
+        "pick up the key",
+        "move to the jar",
+        "put the key in the jar",
+        "move to dispenser B"
     ]
     out = random.choice(string_candidates)
     return out

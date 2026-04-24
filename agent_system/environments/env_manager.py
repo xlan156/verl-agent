@@ -27,7 +27,6 @@ from omegaconf import OmegaConf
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
-from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper
 
 
 _ACTION_META_RE = re.compile(r"\s*,?\s*\"__meta\"\s*:\s*\{[^{}]*\}")
@@ -632,11 +631,9 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper_no_uuid, uuid_to_name
-        from agent_system.environments.env_package.discovery.projection import INVALID_MESSAGE
-        self.uuid_to_name = uuid_to_name
+        from agent_system.environments.env_package.discovery.helpers import all_action_abbr, all_plausible_action_mapper, all_plausible_action_mapper_no_uuid
         self.all_actions = all_plausible_action_mapper_no_uuid
-        self.invalid_message = INVALID_MESSAGE
+        self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
         text_obs, infos = self.envs.reset()
@@ -650,67 +647,10 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         return {"text": full_text_obs, "image": None, "anchor": text_obs}, infos
 
     def step(self, text_actions: List[str]):
-        # Projection uses the *previous-step* infos to parse/validate the raw LLM output.
-        # Some projections may write debugging metadata into these infos (e.g., whether the
-        # model output contained a <think> block or whether it was JSON-formatted). Since
-        # env.step() returns a fresh infos list, we snapshot those flags here and propagate
-        # them into the returned infos for downstream reward/logging.
-        prev_infos = self.last_infos or []
-        actions, valids = self.projection_f(text_actions, prev_infos)
-
-        contain_think_block = [int(info.get("contain_think_block", 0)) for info in prev_infos]
-        contain_action_block = [int(info.get("contain_action_block", 0)) for info in prev_infos]
-        are_json_format = [int(info.get("are_json_format", 0)) for info in prev_infos]
-        think_has_chinese = [int(info.get("think_has_chinese", 0)) for info in prev_infos]
-        action_multiple_actions = [int(info.get("action_multiple_actions", 0)) for info in prev_infos]
-        is_valid = [int(info.get("is_valid", 0)) for info in prev_infos]
-
-        # Pack projection metadata into the action JSON so the underlying env (envs.py)
-        # can shape rewards based on model formatting behavior.
-        # The env is expected to strip __meta before calling the real environment API.
-        for i in range(len(actions)):
-            try:
-                act_obj = json.loads(actions[i]) if isinstance(actions[i], str) else None
-                if isinstance(act_obj, dict):
-                    act_obj["__meta"] = {
-                        "contain_think_block": contain_think_block[i] if i < len(contain_think_block) else 0,
-                        "contain_action_block": contain_action_block[i] if i < len(contain_action_block) else 0,
-                        "are_json_format": are_json_format[i] if i < len(are_json_format) else 0,
-                        "think_has_chinese": think_has_chinese[i] if i < len(think_has_chinese) else 0,
-                        "action_multiple_actions": action_multiple_actions[i] if i < len(action_multiple_actions) else 0,
-                        "is_valid": is_valid[i] if i < len(is_valid) else 0,
-                    }
-                    actions[i] = json.dumps(act_obj, separators=(",", ":"))
-            except Exception:
-                # Best-effort: if action isn't JSON, leave it unchanged.
-                pass
-
+        actions, valids = self.projection_f(text_actions, self.last_infos)
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
-        actions_to_store = []
-        for a in actions:
-            action_processed = None
-            if a == self.invalid_message:
-                action_processed = "The action was invalid, please try again."
-                actions_to_store.append(action_processed)
-                continue
-
-            a = json.loads(a)
-            if a.get("action") in ["PICKUP", "OPEN"]:
-                arg_name = self.uuid_to_name.get(a.get("arg1"), "null")
-                action_processed = {"action": a.get("action"), "arg1": arg_name}
-            
-            if a.get("action") in ["PUT", "USE"]:
-                arg_name = self.uuid_to_name.get(a.get("arg1"), "null")
-                arg2_name = self.uuid_to_name.get(a.get("arg2"), "null")
-                action_processed = {"action": a.get("action"), "arg1": arg_name, "arg2": arg2_name}
-            
-            if action_processed:
-                actions_to_store.append(json.dumps(action_processed))
-            else:
-                actions_to_store.append(json.dumps(a))
-
-        self.memory.store({"text_obs": self.pre_text_obs, "action": actions_to_store})
+        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
@@ -719,18 +659,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
-            if i < len(contain_think_block):
-                info["contain_think_block"] = contain_think_block[i]
-            if i < len(contain_action_block):
-                info["contain_action_block"] = contain_action_block[i]
-            if i < len(are_json_format):
-                info["are_json_format"] = are_json_format[i]
-            if i < len(think_has_chinese):
-                info["think_has_chinese"] = think_has_chinese[i]
-            if i < len(action_multiple_actions):
-                info["action_multiple_actions"] = action_multiple_actions[i]
-            if i < len(is_valid):
-                info["is_valid"] = is_valid[i]
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)
@@ -751,55 +679,25 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             memory_contexts, valid_lens = None, None
 
         for i in range(len(text_obs)):
-            task_desc = infos[i].get("task_description", "")
-            teleport_locs = infos[i].get("teleport_locations", {})
-            last_result = infos[i].get("last_action_result", {})
-            #filtered_actions = self.filter_plausible_actions(infos[i])
-            #filtered_actions = "\n".join(f"{a}" for a in filtered_actions)
-
             state_obs = text_obs[i]
-            teleport_str = "\n".join(f"{loc}" for loc, _ in teleport_locs.items())
-            last_result_str = json.dumps(last_result, indent=2, sort_keys=True) if last_result else "{}"
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
-
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     state_obs=state_obs,
                     step_info=step_info,
                 )
             else:
-                history_block = memory_contexts[i]
-
-                history_block = _strip_action_meta(history_block)
-                #print(history_block)
-                #action_str_history = ""
-
+                # Keep only the last 2 mapped action skills.
+                recent_actions = [record.get("action") for record in self.memory[i][-2:]]
+                memory_actions = "\n".join(a for a in recent_actions if a)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     state_obs=state_obs,
                     step_info=step_info,
-                    memory_context=history_block,
+                    memory_actions=memory_actions,
                 )
-
             postprocess_text_obs.append(obs)
 
         return postprocess_text_obs
-    
-    def filter_plausible_actions(self, info):
-        raw_observations = info.get("raw_observation").get("ui")
-
-        filtered_actions = []
-
-        accessible_objects = raw_observations.get("accessibleEnvironmentObjects")
-        directions_can_move = raw_observations.get("agentLocation").get("directions_you_can_move")
-        for action_text, action_json in all_plausible_action_mapper.items():
-            if accessible_objects is not None:
-                for obj in accessible_objects:
-                    if str(obj.get("uuid")) in json.dumps(action_json):
-                        filtered_actions.append(action_text)
-            for direction in directions_can_move:
-                if direction in json.dumps(action_json) or "rotate" in action_text.lower():
-                    filtered_actions.append(action_text)
-        return list(set(filtered_actions))
 
 
 def make_envs(config):

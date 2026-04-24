@@ -1,4 +1,5 @@
 from agent_system.environments.env_package.discovery.helpers import all_action_abbr
+from agent_system.environments.env_package.discovery.skills import CombinatorialChemistryEasySkill
 
 DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
 RUSTED_KEY = "rusted key (heavily rusted)"
@@ -113,3 +114,47 @@ class RulebasedAgent:
                 return self.action_space["rotate_north"]
             elif location in [(18, 12), (19, 12), (20, 12), (21, 12), (22, 12)]:
                 return self.action_space["move_west"]
+
+
+class RulebasedAgentSkill:
+    def __init__(self, env):
+        self.env = env
+
+    def select_skill(self, info):
+        ui = (info.get("raw_observation") or {}).get("ui", {})
+        inventory = ui.get("inventoryObjects", [])
+        accessible = ui.get("accessibleEnvironmentObjects", [])
+        
+        inv_objects = {}
+        if inventory:
+            inv_objects = {obj.get("name"): obj for obj in inventory if obj.get("name") not in OTHER_OBJECTS}
+        
+        accessible_objects = {}
+        if accessible:
+            accessible_objects = {obj.get("name"): obj for obj in accessible if obj.get("name") not in OTHER_OBJECTS}
+        
+        location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
+        
+        if RUSTED_KEY not in inv_objects and location != (17, 12):
+            return "move_to_key"
+        
+        if location == (17, 12) and RUSTED_KEY in accessible_objects:
+            return "pick_up_key"
+        
+        if RUSTED_KEY in inv_objects and JAR not in inv_objects:
+            if location != (17, 12):
+                return "move_to_jar"
+            else:
+                return "pick_up_jar"
+        
+        if RUSTED_KEY in inv_objects and JAR in inv_objects and not self.env.is_key_in_jar:
+            return "put_key_in_jar"
+        
+        if self.env.is_key_in_jar and location[0] != 19:
+            return "move_to_dispensers_B"
+        
+        if self.env.is_key_in_jar and location[0] == 19:
+            return "use_dispenser_B_on_jar"
+        
+        if KEY_NO_RUST in inv_objects:
+            return "open_door"

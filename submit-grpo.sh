@@ -4,9 +4,9 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
-#SBATCH --time=4:00:00
-#SBATCH --output=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-output.txt
-#SBATCH --error=job_log/Qwen0.5B-MIG-%j/Qwen0.5B-error.txt
+#SBATCH --time=5:00:00
+#SBATCH --output=job_log/Qwen0.5B-GRPO-%j/Qwen0.5B-output.txt
+#SBATCH --error=job_log/Qwen0.5B-GRPO-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
 
 module load 2023
@@ -60,7 +60,7 @@ python3 -m verl.trainer.main_ppo \
     data.truncation='error' \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=Qwen/$model_name \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=1e-7 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
@@ -79,7 +79,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
-    actor_rollout_ref.rollout.top_p=0.95 \
+    actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.temperature=0.8 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -97,7 +97,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
     trainer.project_name='verl_agent_discoveryworld' \
-    trainer.experiment_name="${experiment_name}_2" \
+    trainer.experiment_name="${experiment_name}" \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
