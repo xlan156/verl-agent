@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
 #SBATCH --time=5:00:00
-#SBATCH --output=job_log/Qwen0.5B-GRPO-%j/Qwen0.5B-output.txt
-#SBATCH --error=job_log/Qwen0.5B-GRPO-%j/Qwen0.5B-error.txt
+#SBATCH --output=job_log/GRPO-%j/Qwen0.5B-output.txt
+#SBATCH --error=job_log/GRPO-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
 
 module load 2023
@@ -38,7 +38,7 @@ val_data_size=1
 model_name=Qwen2.5-0.5B-Instruct
 export MODEL_NAME="$model_name"
 
-experiment_name="GRPO_${model_name}"
+experiment_name="GRPO-${model_name}"
 group_size=4
 num_gpus_per_node=1
 
@@ -88,7 +88,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=discoveryworld \
     env.seed=0 \
-    env.max_steps=50 \
+    env.max_steps=40 \
     env.rollout.n=$group_size \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
@@ -96,13 +96,13 @@ python3 -m verl.trainer.main_ppo \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
-    trainer.project_name='verl_agent_discoveryworld' \
+    trainer.project_name='verl-agent-discoveryworld' \
     trainer.experiment_name="${experiment_name}" \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=10 \
-    trainer.test_freq=5 \
+    trainer.test_freq=10 \
     trainer.total_epochs=30 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"

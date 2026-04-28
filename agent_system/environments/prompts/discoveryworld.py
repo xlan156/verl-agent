@@ -19,9 +19,10 @@ DISCOVERYWORLD_TEMPLATE_NO_HIS = """
 [GOAL]
 You are an expert agent in a room with a rusted key and a locked door.
 You need to 
-1. Pick up the key and put it in the jar.
-2. Use dispensers to derust the key.
-3. Open the door and exit.
+1. Find the key, pick it up and put it in the jar.
+2. Take the jar to the dispensers to derust the key.
+3. If the key is still rusted, use bottle cleaner to wash the jar, then take the jar to another dispenser to derust the key.
+4. When the key is derusted, open the door and exit.
 
 [STATE]
 {step_info}
@@ -30,13 +31,13 @@ You need to
 [OUTPUT]
 Return EXACTLY one of:
 move_to_key
-move_to_jar
+pick_up_key
+pick_up_jar
+put_key_in_jar
 move_to_dispenser_A
 move_to_dispenser_B
 move_to_dispenser_C
 move_to_dispenser_D
-pick_up_key
-put_key_in_jar
 use_dispenser_A
 use_dispenser_B
 use_dispenser_C
@@ -44,7 +45,7 @@ use_dispenser_D
 wash_jar
 open_door
 
-Do not output anything else.
+Do not output multiple actions or anything else.
 """
 
 
@@ -52,27 +53,30 @@ DISCOVERYWORLD_TEMPLATE = """
 [GOAL]
 You are an expert agent in a room with a rusted key and a locked door.
 You need to 
-1. Pick up the key and put it in the jar.
-2. Use dispensers to derust the key.
-3. Open the door and exit.
+1. Find the key, pick it up and put it in the jar.
+2. Take the jar to the dispensers to derust the key.
+3. If the key is still rusted, use bottle cleaner to wash the jar, then take the jar to another dispenser to derust the key.
+4. When the key is derusted, open the door and exit.
 
 [STATE]
 {step_info}
 {state_obs}
 
 [MEMORY]
+You have taken the following actions in the 3 past steps:
 {memory_actions}
+Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 
 [OUTPUT]
 Return EXACTLY one of:
 move_to_key
-move_to_jar
+pick_up_key
+pick_up_jar
+put_key_in_jar
 move_to_dispenser_A
 move_to_dispenser_B
 move_to_dispenser_C
 move_to_dispenser_D
-pick_up_key
-put_key_in_jar
 use_dispenser_A
 use_dispenser_B
 use_dispenser_C
@@ -80,5 +84,5 @@ use_dispenser_D
 wash_jar
 open_door
 
-Do not output anything else.
+Do not output multiple actions or anything else.
 """

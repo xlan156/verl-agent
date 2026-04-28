@@ -680,6 +680,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
         for i in range(len(text_obs)):
             state_obs = text_obs[i]
+            state_obs = state_obs.replace("\\n", "\n")
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
@@ -688,7 +689,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 )
             else:
                 # Keep only the last 2 mapped action skills.
-                recent_actions = [record.get("action") for record in self.memory[i][-2:]]
+                recent_actions = [record.get("action") for record in self.memory[i][-3:]]
                 memory_actions = "\n".join(a for a in recent_actions if a)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     state_obs=state_obs,

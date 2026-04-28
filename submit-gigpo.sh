@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
 #SBATCH --time=5:00:00
-#SBATCH --output=job_log/Qwen0.5B-GiGPO-%j/Qwen0.5B-output.txt
-#SBATCH --error=job_log/Qwen0.5B-GiGPO-%j/Qwen0.5B-error.txt
+#SBATCH --output=job_log/GiGPO-%j/Qwen0.5B-output.txt
+#SBATCH --error=job_log/GiGPO-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
 
 module load 2023
@@ -39,7 +39,7 @@ model_name=Qwen2.5-0.5B-Instruct
 export MODEL_NAME="$model_name"
 
 project_name="verl-agent-discoveryworld"
-experiment_name="GiGPO_${model_name}"
+experiment_name="GiGPO-${model_name}"
 num_gpus_per_node=1
 
 # Data preparation: only indicates modality (text) and data size.
@@ -60,7 +60,7 @@ python3 -m verl.trainer.main_ppo \
     data.truncation='error' \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=Qwen/$model_name \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=1e-7 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
@@ -79,13 +79,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
-    actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
     actor_rollout_ref.actor.invalid_action_penalty_coef=0.15 \
-    critic.optim.lr=1e-5 \
+    critic.optim.lr=1e-6 \
     critic.model.use_remove_padding=True \
     critic.model.path=Qwen/$model_name \
     critic.model.enable_gradient_checkpointing=True \
@@ -95,7 +95,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=discoveryworld \
     env.seed=0 \
-    env.max_steps=50 \
+    env.max_steps=40 \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.save_frames=True \
@@ -108,7 +108,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=10 \
-    trainer.test_freq=5 \
-    trainer.total_epochs=30 \
+    trainer.test_freq=10 \
+    trainer.total_epochs=40 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"

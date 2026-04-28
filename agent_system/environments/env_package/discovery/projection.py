@@ -125,8 +125,10 @@ def _normalize_text(text: str) -> str:
     m = _ACTION_RE.search(text)
     if m:
         text = m.group(1).strip()
+    if "\n" in text:
+        text = text.split("\n")[-1]
     text = re.sub(r"[^a-zA-Z0-9]+", " ", text).lower()
-    return " ".join(text.split())
+    return text
 
 
 def _string_similarity(a: str, b: str) -> float:
@@ -178,14 +180,14 @@ def _find_best_skill(action_text: str, threshold: float = 0.6) -> Optional[str]:
 
 def discoveryworld_projection(
     actions: List[str],
-    infos: Optional[List[Dict[str, Any]]] = None,
+    infos: List[Dict[str, Any]],
 ) -> Tuple[List[str], List[int]]:
     processed: List[str] = []
     valids: List[int] = []
 
     key_location = (17, 12)
     for i, action in enumerate(actions):
-        info = infos[i]
+        info = infos[i] if infos else {}
         ui = (info.get("raw_observation") or {}).get("ui", {})
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
         skill = _find_best_skill(action)
@@ -210,12 +212,19 @@ def discoveryworld_projection(
 
 
 if __name__ == "__main__":
+    from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
+    
+    env = DiscoveryWorldEnv(
+        scenario_name="Combinatorial Chemistry",
+        difficulty="Easy",
+        seed=0,
+    )
+    
+    obs, info = env.reset()
     sample_actions = [
-        "Please move to the key.",
-        "Use the dispenser B on the jar.",
-        "wash the jar",
-        "move_to_key_key_key_key_key_sprite"
+        "move_to_key\nput_key_in_jar\nuse_dispenser_A"
     ]
-    projected, valids = discoveryworld_projection(sample_actions)
+    
+    projected, valids = discoveryworld_projection(sample_actions, infos=[info])
     for raw, mapped, valid in zip(sample_actions, projected, valids):
         print(f"input={raw!r} -> mapped={mapped!r} valid={valid}")

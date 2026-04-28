@@ -404,8 +404,7 @@ class TrajectoryCollector:
                         "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
                         "projected_action": str(info_i.get("projected_action", "")),
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
-                        "expert_action": json.dumps(info_i.get("expert_action"), default=str),
-                        "info_json": _truncate(json.dumps(info_i, ensure_ascii=False, default=str)),
+                        "teacher_skill": str(info_i.get("teacher_skill", "")),
                     }
                     llm_step_rows.append(row)
 
@@ -601,17 +600,13 @@ class TrajectoryCollector:
                         "global_step",
                         "rollout_step",
                         "env_index",
-                        "uid",
-                        "traj_uid",
-                        "active",
                         "reward",
                         "done",
                         "prompt",
                         "llm_output",
                         "projected_action",
                         "is_action_valid",
-                        "expert_action",
-                        "info_json",
+                        "teacher_skill",
                     ]
                     table = wandb.Table(columns=columns)
                     for r in llm_step_rows:
@@ -619,17 +614,13 @@ class TrajectoryCollector:
                             int(wandb_step),
                             r.get("rollout_step"),
                             r.get("env_index"),
-                            r.get("uid"),
-                            r.get("traj_uid"),
-                            r.get("active"),
                             r.get("reward"),
                             r.get("done"),
                             r.get("prompt"),
                             r.get("llm_output"),
                             r.get("projected_action"),
                             r.get("is_action_valid"),
-                            r.get("expert_action"),
-                            r.get("info_json"),
+                            r.get("teacher_skill"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))
             except Exception:

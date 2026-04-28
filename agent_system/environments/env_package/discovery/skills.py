@@ -46,6 +46,11 @@ class CombinatorialChemistryEasySkill():
         inventory = self.ui.get("inventoryObjects", [])
         inv_objects = [obj.get("name") for obj in inventory]
         return inv_objects
+    
+    def get_accessible_objects(self):
+        accessible = self.ui.get("accessibleEnvironmentObjects", [])
+        accessible_objects = [obj.get("name") for obj in accessible]
+        return accessible_objects
         
     def move_to_key(self):
         while self.location != (17, 12):
@@ -79,22 +84,16 @@ class CombinatorialChemistryEasySkill():
     
     def pick_up_key(self):
         self.perform_action(self.action_space["pickup_key"])
-        if RUSTED_KEY in self.get_inv_objects():
-            self.env.has_key = True
 
     def put_key_in_jar(self):
         if self.ui.get("agentLocation").get("faceDirection") != "north":
             self.perform_action(self.action_space["rotate_north"])
         self.perform_action(self.action_space["put_key"])
-        if self.env.last_action_result.get("success"):
-            self.env.is_key_in_jar = True
-                
+             
     def pick_up_jar(self):
         if self.ui.get("agentLocation").get("faceDirection") != "north":
             self.perform_action(self.action_space["rotate_north"])
         self.perform_action(self.action_space["pickup_jar"])
-        if JAR in self.get_inv_objects():
-            self.env.has_jar = True
 
     def use_dispenser_on_jar(self, dispenser_id):
         dispenser_action_map = {
@@ -104,8 +103,21 @@ class CombinatorialChemistryEasySkill():
             "D": "use_dispenser_D",
         }
         action_key = dispenser_action_map.get(dispenser_id)
-        if action_key:
+        id_to_location = {
+            "A": (18, 12),
+            "B": (19, 12),
+            "C": (20, 12),
+            "D": (21, 12),
+        }
+        target_location = id_to_location.get(dispenser_id)
+        if self.location[0] == target_location[0]:
+            self.env.used_dispensers[dispenser_id] = True
             self.perform_action(self.action_space[action_key])
+        else:
+            self.move_to_dispensers(dispenser_id)
+            self.env.used_dispensers[dispenser_id] = True
+            self.perform_action(self.action_space[action_key])
+            
     
     def wash_jar(self):
         while self.location != (22, 12):
@@ -113,6 +125,10 @@ class CombinatorialChemistryEasySkill():
         
         self.perform_action(self.action_space["rotate_north"])
         self.perform_action(self.action_space["wash"])
+        self.env.used_dispensers["A"] = False
+        self.env.used_dispensers["B"] = False
+        self.env.used_dispensers["C"] = False
+        self.env.used_dispensers["D"] = False
     
     def open_door(self):
         while self.location[0] < 20:

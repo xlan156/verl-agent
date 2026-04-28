@@ -119,7 +119,12 @@ class RulebasedAgent:
 class RulebasedAgentSkill:
     def __init__(self, env):
         self.env = env
+        self.skill_counter = {}
 
+    def skill(self, skill_name):
+        self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
+        return skill_name
+    
     def select_skill(self, info):
         ui = (info.get("raw_observation") or {}).get("ui", {})
         inventory = ui.get("inventoryObjects", [])
@@ -135,26 +140,52 @@ class RulebasedAgentSkill:
         
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
         
-        if RUSTED_KEY not in inv_objects and location != (17, 12):
-            return "move_to_key"
+        if RUSTED_KEY not in inv_objects and KEY_NO_RUST not in inv_objects and location != (17, 12):
+            return self.skill("move_to_key")
         
         if location == (17, 12) and RUSTED_KEY in accessible_objects:
-            return "pick_up_key"
+            if JAR not in inv_objects and self.env.is_key_in_jar:
+                return self.skill("pick_up_jar")
+            if JAR not in inv_objects and not self.env.is_key_in_jar:
+                return self.skill("pick_up_key")
         
         if RUSTED_KEY in inv_objects and JAR not in inv_objects:
             if location != (17, 12):
-                return "move_to_jar"
+                return self.skill("move_to_jar")
             else:
-                return "pick_up_jar"
+                return self.skill("pick_up_jar")
         
         if RUSTED_KEY in inv_objects and JAR in inv_objects and not self.env.is_key_in_jar:
-            return "put_key_in_jar"
+            return self.skill("put_key_in_jar")
         
-        if self.env.is_key_in_jar and location[0] != 19:
-            return "move_to_dispensers_B"
+        used_other_dispensers = self.env.used_dispenser_A or self.env.used_dispenser_C or self.env.used_dispenser_D
         
-        if self.env.is_key_in_jar and location[0] == 19:
-            return "use_dispenser_B_on_jar"
+        if self.env.is_key_in_jar and JAR in inv_objects and location[0] != 19 and not used_other_dispensers:
+            return self.skill("move_to_dispensers_B")
+        
+        if self.env.is_key_in_jar and JAR in inv_objects and location[0] == 19 and not self.env.used_dispenser_B:
+            return self.skill("use_dispenser_B_on_jar")
+        
+        if self.env.is_key_in_jar and JAR in inv_objects and used_other_dispensers:
+            return self.skill("wash_jar")
         
         if KEY_NO_RUST in inv_objects:
-            return "open_door"
+            return self.skill("open_door")
+    
+
+if __name__ == "__main__":
+    from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
+    env = DiscoveryWorldEnv(
+        scenario_name="Combinatorial Chemistry",
+        difficulty="Easy",
+        seed=0,
+        max_steps=50,
+    )
+    agent = RulebasedAgentSkill(env)
+
+    obs, info = env.reset()
+    done = False
+    while not done:
+        action = agent.select_skill(info)
+        obs, reward, done, info = env.step(action)
+        print(f"Action taken: {action}, Reward: {reward}, Done: {done}")

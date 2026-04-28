@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 import ray
 import torch
+import math
 
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
@@ -36,6 +37,14 @@ def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> 
     )
 
 
+def _strip_uuid(text: str) -> str:
+    if not text:
+        return text
+    return re.sub(r"\s*\[uuid:\s*[^\]]+\]", "", text).strip()
+
+
+RUSTED_KEY = "rusted key (heavily rusted)"
+JAR = "jar"
 IGNORED_OBJECT_NAMES = {"floor", "wall", "grass", "path", "table"}
 INVALID_MESSAGE = "Invalid action or argument"
 SKILL_TO_CATEGORY = {
@@ -45,9 +54,9 @@ SKILL_TO_CATEGORY = {
     "move_to_dispensers_B": "MOVE",
     "move_to_dispensers_C": "MOVE",
     "move_to_dispensers_D": "MOVE",
-    "pick_up_key": "PICKUP",
+    "pick_up_key": "PICKUP_KEY",
     "put_key_in_jar": "PUT",
-    "pick_up_jar": "PICKUP",
+    "pick_up_jar": "PICKUP_JAR",
     "use_dispenser_A_on_jar": "USE",
     "use_dispenser_B_on_jar": "USE",
     "use_dispenser_C_on_jar": "USE",
@@ -112,12 +121,18 @@ class DiscoveryWorldEnv:
         self._object_name_counts = defaultdict(int)
         self.location_history: List[Tuple[Optional[int], Optional[int]]] = []
         self._skill_runner: Optional[CombinatorialChemistryEasySkill] = None
-        self._last_info = None
         
         self.teacher = RulebasedAgentSkill(self)
+        self._last_teacher_skill: Optional[str] = None
         self.has_key = False
         self.has_jar = False
         self.is_key_in_jar = False
+        self.used_dispensers = {
+            "A": False,
+            "B": False,
+            "C": False,
+            "D": False,
+        }
 
     def _record_object_seen(self, name: str, uuid: Any) -> None:
         """Record an object by name with unique suffixes for duplicates."""
@@ -188,12 +203,39 @@ class DiscoveryWorldEnv:
     def _update_location_history(self, ui: Dict[str, Any]) -> None:
         location = (ui.get("agentLocation", {}).get("x"), ui.get("agentLocation", {}).get("y"))
         self.location_history.append(location)
+    
+    def _update_key_jar_status(self, info: Dict[str, Any]) -> None:
+        inventory = info.get("raw_observation", {}).get("ui", {}).get("inventoryObjects", [])
+        accessible = info.get("raw_observation", {}).get("ui", {}).get("accessibleEnvironmentObjects", [])
+        for obj in inventory + accessible:
+            if obj.get("name") == RUSTED_KEY:
+                description = obj.get("description", "")
+                if "in jar" in description:
+                    self.is_key_in_jar = True
+                else:
+                    self.is_key_in_jar = False
+        
+        inv_objects = {obj.get("name"): obj for obj in inventory or []}
+        accessible_objects = {obj.get("name"): obj for obj in accessible or []}
+        self.has_key = RUSTED_KEY in inv_objects
+        self.has_jar = JAR in inv_objects
+
+    def _update_state_from_info(self, info: Dict[str, Any]) -> None:
+        ui = (info.get("raw_observation") or {}).get("ui", {})
+        self._update_object_seen_from_ui(ui)
+        self._update_location_history(ui)
+        self._update_key_jar_status(info)
+
+    def _finalize_info(self, info: Dict[str, Any], is_valid: Optional[bool] = None) -> None:
+        info["object_seen"] = dict(self.object_seen)
+        if is_valid is not None:
+            info["is_valid"] = int(is_valid)
 
     @staticmethod
     def compress_ui_observation(ui_obs: dict) -> str:
         """
         Compress UI observation from ~4000 tokens to <500 tokens.
-        Converts verbose JSON to concise natural language summary while preserving UUIDs.
+        Convert verbose UI JSON into a compact structural text representation.
         """
         lines = []
         
@@ -209,17 +251,19 @@ class DiscoveryWorldEnv:
             if blocked:
                 lines.append(f"Blocked: {blocked}")
         
-        # 2. Inventory (only if non-empty)
+        # 2. Inventory
         inventory = ui_obs.get("inventoryObjects", [])
         if inventory:
-            items = [f"{obj.get('name', 'unknown')}" for obj in inventory if obj.get("name") not in IGNORED_OBJECT_NAMES]
+            items = [_strip_uuid(f"{obj.get('description', '')}")
+                     for obj in inventory if obj.get("name") not in IGNORED_OBJECT_NAMES]
             lines.append(f"Inventory: {', '.join(items)}")
         else:
             lines.append("Inventory: empty")
         
         # 3. Accessible Objects
         accessible = ui_obs.get("accessibleEnvironmentObjects", [])
-        accessible_objects = [f"{obj.get('name', 'unknown')}" for obj in accessible if obj.get("name") not in IGNORED_OBJECT_NAMES]
+        accessible_objects = [_strip_uuid(f"{obj.get('description', '')}")
+                              for obj in accessible if obj.get("name") not in IGNORED_OBJECT_NAMES]
         if accessible_objects:
             lines.append(f"Accessible: {', '.join(accessible_objects)}")
         else:
@@ -229,11 +273,11 @@ class DiscoveryWorldEnv:
         nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
         lines.append("Nearby objects:")
         for direction, objects in nearby.items():
-            # Only include objects within distance 1 and skip floor/wall/grass
             for obj in objects:
                 distance = obj.get("distance", 99)
                 if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES:
-                    lines.append(f"- {direction} ({distance}): {obj.get('name', 'unknown')}")
+                    desc = _strip_uuid(f"{obj.get('description', '')}")
+                    lines.append(f"- {direction} ({distance} tile(s) away): {desc}")
         
         # 5. Nearby Agents (only if non-empty and has actions)
         nearby_agents = ui_obs.get("nearbyAgents", {}).get("list_of_agents", {})
@@ -286,7 +330,8 @@ class DiscoveryWorldEnv:
         text_obs, info = self._format_obs_and_info()
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_object_seen_from_ui(ui)
-        info["object_seen"] = dict(self.object_seen)
+        self._finalize_info(info)
+        self._last_info = info
         self._prev_score = float(info.get("score_normalized", 0.0))
         
         if not self.location_history:
@@ -305,12 +350,9 @@ class DiscoveryWorldEnv:
             self._steps += 1
 
             text_obs, info = self._format_obs_and_info()
-            ui = (info.get("raw_observation") or {}).get("ui", {})
-            self._update_object_seen_from_ui(ui)
-            self._update_location_history(ui)
+            self._update_state_from_info(info)
+            self._finalize_info(info, is_valid=False)
             self._last_info = info
-            info["object_seen"] = dict(self.object_seen)
-            info["is_valid"] = 0
 
             done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
             info["won"] = bool(self._api.areTasksComplete())
@@ -334,17 +376,14 @@ class DiscoveryWorldEnv:
 
         # reward shaping
         text_obs, info = self._format_obs_and_info()
-        ui = (info.get("raw_observation") or {}).get("ui", {})
-        self._update_object_seen_from_ui(ui)
-        self._update_location_history(ui)
-        info["object_seen"] = dict(self.object_seen)
-        info["is_valid"] = int(is_valid)
+        self._update_state_from_info(info)
+        self._finalize_info(info, is_valid=is_valid)
 
         reward, done, reward_info = self._compute_step_reward(skill_name, info)
+        
+        self._last_info = info
         print("rewards:")
         print(json.dumps(reward_info, indent=2))
-        self._last_info = info
-
         return text_obs, reward, done, info
 
     def close(self) -> None:
@@ -357,14 +396,19 @@ class DiscoveryWorldEnv:
     
     def _teacher_skill_reward(self, skill_name: Optional[str]) -> float:
         teacher_skill = self.teacher.select_skill(self._last_info)
+        self._last_teacher_skill = teacher_skill
         if not teacher_skill:
             with open("teacher_skill.txt", "a") as f:
                 ui = (self._last_info.get("raw_observation") or {}).get("ui", {})
                 compressed_obs = self.compress_ui_observation(ui)
                 f.write(f"Observation:\n{compressed_obs}\n\n")
             return 0.0
+        
+        print(f" - Teacher skill: {teacher_skill}, Agent skill: {skill_name}")
         if skill_name == teacher_skill:
-            return 1.0
+            skill_cnt = self.teacher.skill_counter[teacher_skill]
+            decay = math.exp(- 0.2 * skill_cnt)
+            return 1.0 * decay
         else:
             return -0.5
 
@@ -426,27 +470,23 @@ class DiscoveryWorldEnv:
         reward = 0.0
         if self.has_key and not self.has_jar:
             if skill_name in {"move_to_key", "pick_up_key"}:
-                reward = -1.0
-            elif skill_name in {"move_to_jar", "pick_up_jar", "put_key_in_jar"}:
-                reward = 0.5
+                reward = -2.0
         
         if self.has_jar and not self.has_key:
             if skill_name in {"move_to_jar", "pick_up_jar"}:
                 reward = -1.0
-            elif skill_name in {"move_to_key", "pick_up_key"}:
-                reward = 0.5
         
         if self.has_jar and not self.is_key_in_jar:
             if skill_name in {"move_to_jar", "pick_up_jar"}:
                 reward = -1.0
-            elif skill_name in {"put_key_in_jar"}:
-                reward = 0.5
             
         if self.is_key_in_jar:
             if skill_name in {"put_key_in_jar"}:
                 reward = -1.0
-            else:
-                reward = 0.5
+                
+        if not self.has_key and not self.has_jar and self.is_key_in_jar:
+            if skill_name in {"put_key_in_jar", "pick_up_key"}:
+                reward = -2.0
         
         return reward
     
@@ -460,7 +500,18 @@ class DiscoveryWorldEnv:
         
         if self.is_key_in_jar:
             reward += 0.2
-
+        
+        used_any_dispenser = self.used_dispensers["A"] or self.used_dispensers["B"] or self.used_dispensers["C"] or self.used_dispensers["D"]
+        if not self.has_jar and used_any_dispenser:
+            reward -= 0.2
+        
+        elif self.has_jar and self.used_dispensers["B"]:
+            reward += 0.2
+        
+        used_other_dispensers = any(self.used_dispensers[d] for d in ["A", "C", "D"])
+        if self.has_jar and used_other_dispensers:
+            reward += 0.1
+            
         return reward
 
     def clip_reward(self, reward):
@@ -483,24 +534,27 @@ class DiscoveryWorldEnv:
         repetition_penalty = self._compute_repetition_penalty()
         hit_wall_penalty = self._compute_moving_error_penalty(skill_name, self._last_action_result)
         invalid_penalty = self._invalid_action_penalty(bool(info.get("is_valid", 0)))
+        info["teacher_skill"] = self._last_teacher_skill
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
         won_reward = 20.0 if info["won"] else 0.0
 
         time_penalty = -0.02  # Small penalty to encourage faster solutions
-        reward = (
-            30.0 * ingame_process_reward
-            + won_reward
-            + 0.1 * rare_action_reward
-            + 1.0 * teacher_skill_reward
-            + 1.0 * stage_reward
-            + 0.3 * repetition_penalty
-            + 0.3 * stalling_penalty
-            + invalid_penalty
-        )
-        
-        if ingame_process_reward == 0 and won_reward == 0:
+        reward_terms = {
+            "ingame_process_reward": (40.0, ingame_process_reward),
+            "rare_action_reward": (0.1, rare_action_reward),
+            "teacher_skill_reward": (1.0, teacher_skill_reward),
+            "stage_reward": (1.0, stage_reward),
+            "repetition_penalty": (0.3, repetition_penalty),
+            "stalling_penalty": (0.3, stalling_penalty),
+            "subgoal_switching_reward": (0.3, subgoal_switching_reward),
+            "invalid_penalty": (1.0, invalid_penalty),
+        }
+        reward = won_reward + sum(weight * value for weight, value in reward_terms.values())
+
+        should_clip = ingame_process_reward == 0 and won_reward == 0
+        if should_clip:
             reward = self.clip_reward(reward)
 
         reward_info = {
@@ -609,10 +663,7 @@ class DiscoveryWorldVectorEnv:
         results = ray.get(futures)
 
         for obs, info in results:
-            info = dict(info or {})
-            info.setdefault("won", False)
-            obs_list.append(obs)
-            info_list.append(info)
+            self._append_result(obs_list, info_list, obs, info)
 
         return obs_list, info_list
 
@@ -641,12 +692,9 @@ class DiscoveryWorldVectorEnv:
 
         results = ray.get(futures)
         for obs, rew, done, info in results:
-            info = dict(info or {})
-            info.setdefault("won", False)
-            obs_list.append(obs)
+            self._append_result(obs_list, info_list, obs, info)
             reward_list.append(float(rew))
             done_list.append(bool(done))
-            info_list.append(info)
 
         return obs_list, reward_list, done_list, info_list
 
@@ -663,6 +711,18 @@ class DiscoveryWorldVectorEnv:
         # Then kill the actors
         for worker in self._workers:
             ray.kill(worker)
+
+    @staticmethod
+    def _append_result(
+        obs_list: List[str],
+        info_list: List[Dict[str, Any]],
+        obs: str,
+        info: Optional[Dict[str, Any]],
+    ) -> None:
+        normalized = dict(info or {})
+        normalized.setdefault("won", False)
+        obs_list.append(obs)
+        info_list.append(normalized)
 
 
 def build_discoveryworld_envs(
