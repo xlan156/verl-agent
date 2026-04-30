@@ -356,7 +356,7 @@ class DiscoveryWorldEnv:
 
             done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
             info["won"] = bool(self._api.areTasksComplete())
-            return text_obs, -1.0, done, info
+            return text_obs, -0.5, done, info
 
         if self._skill_runner is None:
             self._skill_runner = CombinatorialChemistryEasySkill(self)
@@ -392,7 +392,10 @@ class DiscoveryWorldEnv:
     def _compute_ingame_process_reward(self, cur_score: float) -> float:
         reward = cur_score - self._prev_score
         self._prev_score = cur_score
-        return reward
+        if reward > 0:
+            return 0.5
+        else:
+            return 0.0
     
     def _teacher_skill_reward(self, skill_name: Optional[str]) -> float:
         teacher_skill = self.teacher.select_skill(self._last_info)
@@ -538,22 +541,22 @@ class DiscoveryWorldEnv:
 
         done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
         info["won"] = bool(self._api.areTasksComplete())
-        won_reward = 20.0 if info["won"] else 0.0
+        won_reward = 10.0 if info["won"] else 0.0
 
         time_penalty = -0.02  # Small penalty to encourage faster solutions
         reward_terms = {
-            "ingame_process_reward": (40.0, ingame_process_reward),
+            "ingame_process_reward": (5.0, ingame_process_reward),
             "rare_action_reward": (0.1, rare_action_reward),
-            "teacher_skill_reward": (1.0, teacher_skill_reward),
-            "stage_reward": (1.0, stage_reward),
-            "repetition_penalty": (0.3, repetition_penalty),
-            "stalling_penalty": (0.3, stalling_penalty),
-            "subgoal_switching_reward": (0.3, subgoal_switching_reward),
+            "teacher_skill_reward": (0.15, teacher_skill_reward),
+            "stage_reward": (1.5, stage_reward),
+            "repetition_penalty": (0.4, repetition_penalty),
+            "stalling_penalty": (0.4, stalling_penalty),
+            "subgoal_switching_reward": (0.1, subgoal_switching_reward),
             "invalid_penalty": (1.0, invalid_penalty),
         }
         reward = won_reward + sum(weight * value for weight, value in reward_terms.values())
 
-        should_clip = ingame_process_reward == 0 and won_reward == 0
+        should_clip = won_reward == 0
         if should_clip:
             reward = self.clip_reward(reward)
 

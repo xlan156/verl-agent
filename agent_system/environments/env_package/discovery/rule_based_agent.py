@@ -158,12 +158,12 @@ class RulebasedAgentSkill:
         if RUSTED_KEY in inv_objects and JAR in inv_objects and not self.env.is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        used_other_dispensers = self.env.used_dispenser_A or self.env.used_dispenser_C or self.env.used_dispenser_D
+        used_other_dispensers = any(self.env.used_dispensers[x] for x in ["A", "C", "D"])
         
         if self.env.is_key_in_jar and JAR in inv_objects and location[0] != 19 and not used_other_dispensers:
             return self.skill("move_to_dispensers_B")
         
-        if self.env.is_key_in_jar and JAR in inv_objects and location[0] == 19 and not self.env.used_dispenser_B:
+        if self.env.is_key_in_jar and JAR in inv_objects and location[0] == 19 and not self.env.used_dispensers["B"]:
             return self.skill("use_dispenser_B_on_jar")
         
         if self.env.is_key_in_jar and JAR in inv_objects and used_other_dispensers:

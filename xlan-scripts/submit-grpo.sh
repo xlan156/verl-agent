@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
-#SBATCH --time=5:00:00
+#SBATCH --time=05:30:00
 #SBATCH --output=job_log/GRPO-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/GRPO-%j/Qwen0.5B-error.txt
 #SBATCH --reservation=terv92681
@@ -31,7 +31,7 @@ SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Easy}"
 
 num_cpus_per_env_worker=0.2 # CPU per DiscoveryWorld env worker; reduce to save CPU.
-train_data_size=6 # number of parallel tasks (matches other PPO examples)
+train_data_size=4 # number of parallel tasks (matches other PPO examples)
 val_data_size=1
 # CPU estimate: num_cpus_per_env_worker * (train_data_size * group_size + val_data_size) + 1
 
@@ -39,7 +39,7 @@ model_name=Qwen2.5-0.5B-Instruct
 export MODEL_NAME="$model_name"
 
 experiment_name="GRPO-${model_name}"
-group_size=4
+group_size=2
 num_gpus_per_node=1
 
 # Data preparation: only indicates modality (text) and data size.
@@ -60,9 +60,9 @@ python3 -m verl.trainer.main_ppo \
     data.truncation='error' \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=Qwen/$model_name \
-    actor_rollout_ref.actor.optim.lr=1e-7 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
@@ -88,7 +88,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=discoveryworld \
     env.seed=0 \
-    env.max_steps=40 \
+    env.max_steps=50 \
     env.rollout.n=$group_size \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
@@ -103,6 +103,6 @@ python3 -m verl.trainer.main_ppo \
     trainer.log_llm_steps=True \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
-    trainer.total_epochs=30 \
+    trainer.total_epochs=40 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"
