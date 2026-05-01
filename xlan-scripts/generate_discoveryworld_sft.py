@@ -20,7 +20,7 @@ from agent_system.memory import SimpleMemory
 from sft.cartesian_dataset import extract_unique_actions, copy_action_order
 
 
-with open("qwen_apikey.txt", "r") as f:
+with open("xlan-scripts/qwen_apikey.txt", "r") as f:
     API_KEY = f.read().strip()
     
 BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"

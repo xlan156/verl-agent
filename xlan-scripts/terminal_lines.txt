@@ -20,6 +20,25 @@ cd verl-agent
 pip3 install -e .
 pip3 install vllm==0.8.2
 
+# ================================
+VENV版本
+
+python3 -m venv ~/venvs/verlagentdis
+source ~/venvs/verlagentdis/bin/activate
+cd agent_system/environments/env_package/discovery/discoveryworld
+pip install -r requirements.txt
+pip install -e .
+
+pip3 install torch==2.6.0
+pip install --upgrade pip setuptools wheel
+
+# 1. 既然日志里已经给出了 URL，直接用 wget 下载
+wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+pip install flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
+pip install -e .
+pip install vllm==0.8.2
+
 # ---------------------------------
 # Webshop
 conda create -n verl-agent-webshop python=3.10

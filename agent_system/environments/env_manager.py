@@ -806,9 +806,9 @@ def make_envs(config):
 
         # Optional nested config: env.discoveryworld.{scenario_name,difficulty}
         discovery_cfg = getattr(config.env, "discoveryworld", None)
-        scenario_name = getattr(discovery_cfg, "scenario_name", None)
-        difficulty = getattr(discovery_cfg, "difficulty", None)
-        save_frames = getattr(discovery_cfg, "save_frames", None)
+        scenario_name = getattr(discovery_cfg, "scenario_name", "Combinatorial Chemistry")
+        difficulty = getattr(discovery_cfg, "difficulty", "Easy")
+        save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
 
         env_kwargs = {

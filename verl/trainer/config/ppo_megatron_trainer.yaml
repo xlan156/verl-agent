@@ -319,4 +319,5 @@ trainer:
   log_llm_steps_max_chars: 8000
 
 ray_init:
-  num_cpus: null # `None` means using all CPUs, which might cause hang if limited in systems like SLURM. Please set to a number allowed then.
+  address: 'auto'
+# `None` means using all CPUs, which might cause hang if limited in systems like SLURM. Please set to a number allowed then.

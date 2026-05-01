@@ -151,7 +151,7 @@ def _extract_skill_from_json(text: str) -> Optional[str]:
     return None
 
 
-def _find_best_skill(action_text: str, threshold: float = 0.6) -> Optional[str]:
+def _find_best_skill(action_text: str, info: Dict, threshold: float = 0.6) -> Optional[str]:
     if not action_text:
         return None
 
@@ -159,6 +159,8 @@ def _find_best_skill(action_text: str, threshold: float = 0.6) -> Optional[str]:
     if direct:
         return direct
 
+    if "\n" in action_text or "\\n" in action_text:
+        info["has_multiple_skills"] = True
     normalized = _normalize_text(action_text)
     if not normalized:
         return None
@@ -188,24 +190,76 @@ def discoveryworld_projection(
     key_location = (17, 12)
     for i, action in enumerate(actions):
         info = infos[i] if infos else {}
+        info["has_multiple_skills"] = False
         ui = (info.get("raw_observation") or {}).get("ui", {})
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
-        skill = _find_best_skill(action)
+        skill = _find_best_skill(action_text=action, info=info, threshold=0.6)
+        has_multiple_skills = bool(info.get("has_multiple_skills", False))
         if skill is None:
-            processed.append(action)
+            if has_multiple_skills:
+                processed.append(
+                    json.dumps(
+                        {
+                            "action": action,
+                            "__meta": {"has_multiple_skills": True},
+                        }
+                    )
+                )
+            else:
+                processed.append(action)
             valids.append(0)
         else:
             if location == key_location and (skill == "move_to_key" or skill == "move_to_jar"):
-                processed.append(skill)
+                if has_multiple_skills:
+                    processed.append(
+                        json.dumps(
+                            {
+                                "action": skill,
+                                "__meta": {"has_multiple_skills": True},
+                            }
+                        )
+                    )
+                else:
+                    processed.append(skill)
                 valids.append(0)
             elif location != key_location and skill in ["pick_up_key", "put_key_in_jar", "pick_up_jar"]:
-                processed.append(skill)
+                if has_multiple_skills:
+                    processed.append(
+                        json.dumps(
+                            {
+                                "action": skill,
+                                "__meta": {"has_multiple_skills": True},
+                            }
+                        )
+                    )
+                else:
+                    processed.append(skill)
                 valids.append(0)
             elif skill.startswith("use_dispenser") and location[0] < 18:
-                processed.append(skill)
+                if has_multiple_skills:
+                    processed.append(
+                        json.dumps(
+                            {
+                                "action": skill,
+                                "__meta": {"has_multiple_skills": True},
+                            }
+                        )
+                    )
+                else:
+                    processed.append(skill)
                 valids.append(0)
             else:
-                processed.append(skill)
+                if has_multiple_skills:
+                    processed.append(
+                        json.dumps(
+                            {
+                                "action": skill,
+                                "__meta": {"has_multiple_skills": True},
+                            }
+                        )
+                    )
+                else:
+                    processed.append(skill)
                 valids.append(1)
 
     return processed, valids

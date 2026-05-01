@@ -146,7 +146,7 @@ class RulebasedAgentSkill:
         if location == (17, 12) and RUSTED_KEY in accessible_objects:
             if JAR not in inv_objects and self.env.is_key_in_jar:
                 return self.skill("pick_up_jar")
-            if JAR not in inv_objects and not self.env.is_key_in_jar:
+            if not self.env.is_key_in_jar:
                 return self.skill("pick_up_key")
         
         if RUSTED_KEY in inv_objects and JAR not in inv_objects:

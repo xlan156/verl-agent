@@ -73,6 +73,9 @@ def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
         "move to the jar",
         "put the key in the jar",
         "move to dispenser B"
+        "use dispenser B on the jar",
+        "pick up the jar",
+        "move to the key"
     ]
     out = random.choice(string_candidates)
     return out
@@ -114,7 +117,7 @@ def run_env_manager_rollout(env_num: int = 1, max_env_steps: int = 20) -> None:
     """Use DiscoveryWorldEnvironmentManager + discoveryworld_projection with a fake LLM."""
     # 在构建 env manager 之前，先用 local_mode 初始化 Ray，方便本地单进程调试
     if not ray.is_initialized():
-        ray.init(local_mode=True, num_cpus=2)
+        ray.init(address='auto', ignore_reinit_error=True)
 
     config = build_test_config(env_num=env_num, max_steps=max_env_steps)
     env_manager, _ = make_envs(config)

@@ -50,6 +50,7 @@ def run_generation(config) -> None:
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(
+            address='auto',
             runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN"}},
             num_cpus=config.ray_init.num_cpus,
         )
