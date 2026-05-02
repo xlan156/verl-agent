@@ -1066,6 +1066,11 @@ class RayPPOTrainer:
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
+                batch_size = len(gen_batch.batch)
+                gen_batch.non_tensor_batch["env_kwargs"] = np.array(
+                    [{"train_epoch": epoch} for _ in range(batch_size)],
+                    dtype=object,
+                )
 
                 is_last_step = self.global_steps >= self.total_training_steps
 

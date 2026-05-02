@@ -636,7 +636,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
-        text_obs, infos = self.envs.reset()
+        text_obs, infos = self.envs.reset(kwargs=kwargs)
 
         self.memory.reset(batch_size=len(text_obs))
         self.tasks = [info.get("task_description", "") for info in infos]

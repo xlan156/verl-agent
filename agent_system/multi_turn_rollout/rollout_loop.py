@@ -405,6 +405,7 @@ class TrajectoryCollector:
                         "projected_action": str(info_i.get("projected_action", "")),
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
+                        "action_status": str(info_i.get("action_status", "")),
                     }
                     llm_step_rows.append(row)
 
@@ -607,6 +608,7 @@ class TrajectoryCollector:
                         "projected_action",
                         "is_action_valid",
                         "teacher_skill",
+                        "action_status",
                     ]
                     table = wandb.Table(columns=columns)
                     for r in llm_step_rows:
@@ -621,6 +623,7 @@ class TrajectoryCollector:
                             r.get("projected_action"),
                             r.get("is_action_valid"),
                             r.get("teacher_skill"),
+                            r.get("action_status"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))
             except Exception:

@@ -3,6 +3,8 @@ from agent_system.environments.env_package.discovery.skills import Combinatorial
 
 DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
 RUSTED_KEY = "rusted key (heavily rusted)"
+RUSTED_KEY_2 = "rusted key (moderately rusted)"
+RUSTED_KEY_3 = "rusted key (lightly rusted)"
 KEY_NO_RUST = "key (no rust)"
 JAR = "jar"
 DOOR = "door"
@@ -17,9 +19,11 @@ class RulebasedAgent:
     
     def __init__(self, env):
         self.env = env
+        self.seed = env._seed
         self.action_space = all_action_abbr
         self.door_opened = False
         self.is_key_in_jar = False
+
     
     def select_action(self, info):
 
@@ -120,7 +124,15 @@ class RulebasedAgentSkill:
     def __init__(self, env):
         self.env = env
         self.skill_counter = {}
-
+        self.solutions = {
+            0: "B",
+            1: "D",
+            2: "C",
+            3: "A",
+            4: "C",
+        }
+        self.env_solution = self.solutions[self.env._seed % 5]
+        
     def skill(self, skill_name):
         self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
         return skill_name
@@ -158,15 +170,24 @@ class RulebasedAgentSkill:
         if RUSTED_KEY in inv_objects and JAR in inv_objects and not self.env.is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        used_other_dispensers = any(self.env.used_dispensers[x] for x in ["A", "C", "D"])
+        other_dispenser_ids = [i for i in ["A", "B", "C", "D"] if i != self.env_solution]
+        used_other_dispensers = any(self.env.used_dispensers[x] for x in other_dispenser_ids)
+        target_dispenser_location = {
+            "A": (18, 12),
+            "B": (19, 12),
+            "C": (20, 12),
+            "D": (21, 12),
+        }[self.env_solution]
         
-        if self.env.is_key_in_jar and JAR in inv_objects and location[0] != 19 and not used_other_dispensers:
-            return self.skill("move_to_dispensers_B")
+        rusted_key_in_hand = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3])
         
-        if self.env.is_key_in_jar and JAR in inv_objects and location[0] == 19 and not self.env.used_dispensers["B"]:
-            return self.skill("use_dispenser_B_on_jar")
+        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location != target_dispenser_location and not used_other_dispensers:
+            return self.skill(f"move_to_dispenser_{self.env_solution}")
         
-        if self.env.is_key_in_jar and JAR in inv_objects and used_other_dispensers:
+        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location == target_dispenser_location:
+            return self.skill(f"use_dispenser_{self.env_solution}_on_jar")
+        
+        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_other_dispensers:
             return self.skill("wash_jar")
         
         if KEY_NO_RUST in inv_objects:
@@ -178,7 +199,7 @@ if __name__ == "__main__":
     env = DiscoveryWorldEnv(
         scenario_name="Combinatorial Chemistry",
         difficulty="Easy",
-        seed=0,
+        seed=2,
         max_steps=50,
     )
     agent = RulebasedAgentSkill(env)

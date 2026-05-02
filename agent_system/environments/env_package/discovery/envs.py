@@ -9,6 +9,7 @@ from collections import defaultdict
 import ray
 import torch
 import math
+import numpy as np
 
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
@@ -47,7 +48,7 @@ def _extract_action_and_meta(action: Any) -> Tuple[Optional[str], Dict[str, Any]
     """Extract action string plus optional metadata.
 
     Supports JSON string payloads like:
-      {"action": "move_to_key", "__meta": {"has_multiple_skills": true}}
+      {"action": "move_to_key", "__meta": {}}
     """
 
     meta: Dict[str, Any] = {}
@@ -94,10 +95,10 @@ INVALID_MESSAGE = "Invalid action or argument"
 SKILL_TO_CATEGORY = {
     "move_to_key": "MOVE",
     "move_to_jar": "MOVE",
-    "move_to_dispensers_A": "MOVE",
-    "move_to_dispensers_B": "MOVE",
-    "move_to_dispensers_C": "MOVE",
-    "move_to_dispensers_D": "MOVE",
+    "move_to_dispenser_A": "MOVE",
+    "move_to_dispenser_B": "MOVE",
+    "move_to_dispenser_C": "MOVE",
+    "move_to_dispenser_D": "MOVE",
     "pick_up_key": "PICKUP_KEY",
     "put_key_in_jar": "PUT",
     "pick_up_jar": "PICKUP_JAR",
@@ -134,6 +135,9 @@ class DiscoveryWorldEnv:
         self._steps: int = 0
         self._prev_score: float = 0.0
         self._last_action_result: Optional[Dict[str, Any]] = None
+        self.train_epoch: Optional[int] = None
+        self.teacher_prob: float = 0.2
+        self.teacher_prob_anneal_end_epoch: int = 10
         
         # reward shaping
         self.init_reward_shaping()
@@ -167,6 +171,8 @@ class DiscoveryWorldEnv:
         self._skill_runner: Optional[CombinatorialChemistryEasySkill] = None
         
         self.teacher = RulebasedAgentSkill(self)
+        self._teacher_rollout_prob = self._get_teacher_rollout_prob()
+        self.use_teacher_episode = (np.random.rand() < self._teacher_rollout_prob)
         self._last_teacher_skill: Optional[str] = None
         self.has_key = False
         self.has_jar = False
@@ -177,6 +183,22 @@ class DiscoveryWorldEnv:
             "C": False,
             "D": False,
         }
+
+    def _set_reset_context(self, kwargs: Optional[Dict[str, Any]]) -> None:
+        if isinstance(kwargs, dict):
+            self.train_epoch = kwargs.get("train_epoch")
+        else:
+            self.train_epoch = None
+
+    def _get_teacher_rollout_prob(self) -> float:
+        """Anneal teacher rollout usage to zero after a few epochs."""
+        if self.train_epoch is None:
+            return self.teacher_prob
+        if self.train_epoch >= self.teacher_prob_anneal_end_epoch:
+            return 0.0
+
+        progress = 1.0 - (float(self.train_epoch) / float(self.teacher_prob_anneal_end_epoch))
+        return max(0.0, self.teacher_prob * progress)
 
     def _record_object_seen(self, name: str, uuid: Any) -> None:
         """Record an object by name with unique suffixes for duplicates."""
@@ -227,6 +249,9 @@ class DiscoveryWorldEnv:
             "teleport_locations": self._api.listTeleportLocationsDict(),
             "last_action_result": self._last_action_result,
             "score_normalized": self._score_normalized(),
+            "train_epoch": self.train_epoch,
+            "teacher_rollout_prob": self._teacher_rollout_prob,
+            "use_teacher_episode": self.use_teacher_episode,
         }
 
         info["won"] = bool(self._api.areTasksComplete())
@@ -363,7 +388,8 @@ class DiscoveryWorldEnv:
         
         return "\n".join(lines)
 
-    def reset(self) -> Tuple[str, Dict[str, Any]]:
+    def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
+        self._set_reset_context(kwargs)
         self._init_api()
         self._steps = 0
         self._prev_score = 0.0
@@ -385,27 +411,24 @@ class DiscoveryWorldEnv:
     def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
         assert self._api is not None
 
-        action_text, action_meta = _extract_action_and_meta(action)
-        has_multiple_skills = bool(action_meta.get("has_multiple_skills", False))
-
+        action_text = action
         skill_name = action_text if isinstance(action_text, str) and action_text in SKILL_TO_CATEGORY else None
         is_valid = bool(skill_name)
 
         if not is_valid:
-            self._last_action_result = {"success": False, "message": INVALID_MESSAGE}
             self.action_history.append("INVALID")
             self._steps += 1
 
             text_obs, info = self._format_obs_and_info()
-            info["has_multiple_skills"] = has_multiple_skills
+            info["action_status"] = "invalid"
             self._update_state_from_info(info)
             self._finalize_info(info, is_valid=False)
-            self._last_info = info
 
             done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
             info["won"] = bool(self._api.areTasksComplete())
-            return text_obs, -1.0, done, info
+            return text_obs, -0.5, done, info
 
+        # 2) execute valid action
         if self._skill_runner is None:
             self._skill_runner = CombinatorialChemistryEasySkill(self)
 
@@ -413,26 +436,34 @@ class DiscoveryWorldEnv:
             skill_fn = self._skill_runner.skill_mapping.get(skill_name)
             if skill_fn is None:
                 raise ValueError(f"Unknown skill: {skill_name}")
+
             skill_fn()
             self.action_history.append(skill_name)
-        except Exception as e:
-            self._last_action_result = {"success": False, "message": "Invalid action"}
-            self.action_history.append("INVALID")
-            is_valid = False
+
+            # here: if env didn't raise, treat as valid action
+            # success is determined by env result, not just parse success
+            success = bool(self._last_action_result.get("success", False))
+            action_status = "success" if success else "valid_but_failed"
+
+        except Exception:
+            # valid action name, but execution failed due to precondition / env issue
+            self._last_action_result = {"success": False, "message": "Action failed"}
+            self.action_history.append(skill_name)
+            success = False
+            action_status = "valid_but_failed"
+
 
         self._steps += 1
 
         # reward shaping
         text_obs, info = self._format_obs_and_info()
-        info["has_multiple_skills"] = has_multiple_skills
+        info["action_status"] = action_status
         self._update_state_from_info(info)
         self._finalize_info(info, is_valid=is_valid)
 
-        reward, done, reward_info = self._compute_step_reward(skill_name, info)
+        reward, done = self._compute_step_reward(skill_name, info)
         
         self._last_info = info
-        print("rewards:")
-        print(json.dumps(reward_info, indent=2))
         return text_obs, reward, done, info
 
     def close(self) -> None:
@@ -441,10 +472,7 @@ class DiscoveryWorldEnv:
     def _game_progress_reward(self, cur_score: float) -> float:
         reward = cur_score - self._prev_score
         self._prev_score = cur_score
-        if reward > 0:
-            return 0.5
-        else:
-            return 0.0
+        return reward
     
     def _teacher_skill_reward(self, skill_name: Optional[str]) -> float:
         teacher_skill = self.teacher.select_skill(self._last_info)
@@ -456,52 +484,21 @@ class DiscoveryWorldEnv:
                 f.write(f"Observation:\n{compressed_obs}\n\n")
             return 0.0
         
-        print(f" - Teacher skill: {teacher_skill}, Agent skill: {skill_name}")
         if skill_name == teacher_skill:
             skill_cnt = self.teacher.skill_counter[teacher_skill]
-            decay = math.exp(- 0.2 * skill_cnt)
-            return 1.0 * decay
+            decay = math.exp(- 0.1 * skill_cnt)
+            return 0.4
         else:
-            return -0.5
+            return -0.05
 
-    def _compute_stalling_penalty(self, skill_name: Optional[str]) -> float:
+    def _repetition_penalty(self) -> float:
         penalty = 0.0
-        if skill_name in {"move_to_key", "move_to_jar", "move_to_dispensers_A", "move_to_dispensers_B", "move_to_dispensers_C", "move_to_dispensers_D"}:
-            if len(self.location_history) >= 3 and set(self.location_history[-3:]) == {self.location_history[-1]}:
-                penalty -= 0.2
-        if len(self.location_history) >= 5 and set(self.location_history[-5:]) == {self.location_history[-1]}:
-            penalty -= 0.2
+        if len(self.action_history) >= 3 and len(set(self.action_history[-3:])) == 1:
+            penalty = -0.1
+        if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
+            penalty = -0.2
         return penalty
 
-    def _compute_repetition_penalty(self) -> float:
-        if len(self.action_history) >= 3 and len(set(self.action_history[-3:])) == 1:
-            return -1.0
-        return 0.0
-    
-    def _recent_action_entropy(self):
-        if not self.action_history:
-            return 0.0
-        
-        n = len(self.action_history)
-        n = max(n, 6)
-        counts = defaultdict(int)
-        for action in self.action_history[-n:]:
-            counts[action] += 1
-        probs = torch.tensor([count / n for count in counts.values()])
-        entropy = -(probs * torch.log(probs + 1e-8)).sum()
-        max_entropy = torch.log(torch.tensor(len(counts), dtype=torch.float))
-        
-        decay = max(0.0, 1.0 - self._steps / self._max_steps)
-        norm_entropy = entropy / (max_entropy + 1e-8) * decay
-        
-        return norm_entropy.item()
-    
-    def _compute_moving_error_penalty(self, skill_name: Optional[str], result: Optional[Dict[str, Any]]) -> float:
-        if skill_name and skill_name.startswith("move_to"):
-            if result and not result.get("success"):
-                return -0.1
-        return 0.0
-    
     def _rare_action_reward(self, skill_name: Optional[str]) -> float:
         category = SKILL_TO_CATEGORY.get(skill_name or "")
         if not category:
@@ -510,69 +507,51 @@ class DiscoveryWorldEnv:
         self.action_counter[category] += 1
         return reward
     
-    def _invalid_action_penalty(self, is_valid: bool) -> float:
+    def _invalid_action_penalty(self, info: Dict) -> float:
+        action_status = info.get("action_status")
         penalty = 0.0
-        if not is_valid:
+        if action_status == "invalid":
             penalty = -0.5
-        if self._last_action_result.get("success") is False:
-            penalty -= 0.5
+        elif action_status == "valid_but_failed":
+            penalty = -0.2
+        else:
+            penalty = 0.0
+        
         return penalty
-    
-    def _multiple_skills_penalty(self, has_multiple_skills: bool) -> float:
-        if has_multiple_skills:
-            return -0.5
-        return 0.0
-    
-    def _subgoal_switching_reward(self, skill_name: Optional[str]) -> float:
-        reward = 0.0
-        if self.has_key and not self.has_jar:
-            if skill_name in {"move_to_key", "pick_up_key"}:
-                reward = -2.0
-        
-        if self.has_jar and not self.has_key:
-            if skill_name in {"move_to_jar", "pick_up_jar"}:
-                reward = -1.0
-        
-        if self.has_jar and not self.is_key_in_jar:
-            if skill_name in {"move_to_jar", "pick_up_jar"}:
-                reward = -1.0
-            
-        if self.is_key_in_jar:
-            if skill_name in {"put_key_in_jar"}:
-                reward = -1.0
-                
-        if not self.has_key and not self.has_jar and self.is_key_in_jar:
-            if skill_name in {"put_key_in_jar", "pick_up_key"}:
-                reward = -2.0
-        
-        return reward
     
     def _stage_reward(self) -> float:
         reward = 0.0
-        if self.has_key:
+        if self.has_key and not self.prev_has_key:
             reward += 0.2
-        
-        if self.has_jar:
+        if self.has_jar and not self.prev_has_jar:
             reward += 0.2
-        
-        if self.is_key_in_jar:
-            reward += 0.2
-        
-        used_any_dispenser = self.used_dispensers["A"] or self.used_dispensers["B"] or self.used_dispensers["C"] or self.used_dispensers["D"]
-        if not self.has_jar and used_any_dispenser:
-            reward -= 0.2
-        
-        elif self.has_jar and self.used_dispensers["B"]:
-            reward += 0.2
-        
-        used_other_dispensers = any(self.used_dispensers[d] for d in ["A", "C", "D"])
-        if self.has_jar and used_other_dispensers:
-            reward += 0.1
-            
-        return reward
+        if self.is_key_in_jar and not self.prev_is_key_in_jar:
+            reward += 0.4
 
-    def clip_reward(self, reward, upper, lower):
-        clipped = max(lower, min(upper, reward))
+        self.prev_has_key = self.has_key
+        self.prev_has_jar = self.has_jar
+        self.prev_is_key_in_jar = self.is_key_in_jar
+        return reward
+    
+    def _no_progress_move_penalty(self, cur_score) -> float:
+        if len(self.location_history) < 4:
+            return 0.0
+
+        recent_move = self.action_history[-1] in {
+            "move_to_key", "move_to_jar",
+            "move_to_dispensers_A", "move_to_dispensers_B",
+            "move_to_dispensers_C", "move_to_dispensers_D"
+        }
+
+        no_location_change = len(set(self.location_history[-4:])) == 1
+        no_score_change = abs(cur_score - self._prev_score) < 1e-6  # 如果你愿意单独保存 last_score
+
+        if recent_move and no_score_change:
+            return -0.2
+        return 0.0
+
+    def clip_reward(self, reward):
+        clipped = float(np.clip(reward, -1.0, 2.0))
         return clipped
     
     def _compute_step_reward(
@@ -583,50 +562,34 @@ class DiscoveryWorldEnv:
         cur_score = float(info.get("score_normalized", 0.0))
         game_progress_reward = self._game_progress_reward(cur_score)
         teacher_skill_reward = self._teacher_skill_reward(skill_name)
-        rare_action_reward = self._rare_action_reward(skill_name)
         stage_reward = self._stage_reward()
-        subgoal_switching_reward = self._subgoal_switching_reward(skill_name)
         
-        multiple_skills_penalty = self._multiple_skills_penalty(bool(info.get("has_multiple_skills", False)))
-        stalling_penalty = self._compute_stalling_penalty(skill_name)
-        repetition_penalty = self._compute_repetition_penalty()
-        hit_wall_penalty = self._compute_moving_error_penalty(skill_name, self._last_action_result)
-        invalid_penalty = self._invalid_action_penalty(bool(info.get("is_valid", 0)))
+        repetition_penalty = self._repetition_penalty()
+        invalid_penalty = self._invalid_action_penalty(info)
+        no_progress_penalty = self._no_progress_move_penalty(cur_score)
         info["teacher_skill"] = self._last_teacher_skill
 
-        done = bool(self._api.areTasksComplete() or self._steps >= self._max_steps)
-        info["won"] = bool(self._api.areTasksComplete())
-        won_reward = 30.0 if info["won"] else 0.0
+        task_completed = bool(self._api.areTasksComplete())
+        done = task_completed or self._steps >= self._max_steps
+        info["won"] = task_completed
 
-        time_penalty = -0.02  # Small penalty to encourage faster solutions
-        reward_terms = {
-            "game_progress_reward": (10.0, game_progress_reward),
-            "rare_action_reward": (0.0, rare_action_reward),
-            "teacher_skill_reward": (1.5, teacher_skill_reward),
-            "stage_reward": (1.0, stage_reward),
-            "multiple_skills_penalty": (0.8, multiple_skills_penalty),
-            "repetition_penalty": (0.2, repetition_penalty),
-            "stalling_penalty": (0.25, stalling_penalty),
-            "subgoal_switching_reward": (0.25, subgoal_switching_reward),
-            "invalid_penalty": (0.8, invalid_penalty),
-        }
-        reward = won_reward + sum(weight * value for weight, value in reward_terms.values())
+        reward = 0.0
+        # Positive rewards
+        reward += 8.0 * game_progress_reward
+        reward += teacher_skill_reward
+        reward += stage_reward
+
+        # Penalties
+        reward += repetition_penalty
+        reward += invalid_penalty
+        reward += no_progress_penalty
+        if not task_completed:
+            reward = self.clip_reward(reward)
+        else:
+            reward += 5.0
         
-        if not done:
-            reward = self.clip_reward(reward, upper=6.0, lower=-1.5)
 
-        reward_info = {
-            "step_reward": reward,
-            "game_progress_reward": game_progress_reward,
-            "teacher_skill_reward": teacher_skill_reward,
-            "rare_action_reward": rare_action_reward,
-            "multiple_skills_penalty": multiple_skills_penalty,
-            "repetition_penalty": repetition_penalty,
-            "stalling_penalty": stalling_penalty,
-            "invalid_penalty": invalid_penalty,
-        }
-
-        return reward, done, reward_info
+        return reward, done
 
 
 class DiscoveryWorldWorker:
@@ -655,8 +618,8 @@ class DiscoveryWorldWorker:
             frames_dir=frames_dir,
         )
 
-    def reset(self) -> Tuple[str, Dict[str, Any]]:
-        return self._env.reset()
+    def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
+        return self._env.reset(kwargs=kwargs)
 
     def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
         return self._env.step(action)
@@ -712,14 +675,29 @@ class DiscoveryWorldVectorEnv:
             self._workers.append(worker)
 
 
-    def reset(self) -> Tuple[List[str], List[Dict[str, Any]]]:
+    def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[List[str], List[Dict[str, Any]]]:
         if self.num_processes == 0:
             return [], []
 
         obs_list: List[str] = []
         info_list: List[Dict[str, Any]] = []
 
-        futures = [worker.reset.remote() for worker in self._workers]
+        if kwargs is None:
+            worker_kwargs = [None] * self.num_processes
+        elif isinstance(kwargs, dict):
+            worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
+        elif isinstance(kwargs, np.ndarray):
+            worker_kwargs = kwargs.tolist()
+        elif isinstance(kwargs, (list, tuple)):
+            if len(kwargs) != self.num_processes:
+                raise ValueError(
+                    f"Expected {self.num_processes} reset kwargs, got {len(kwargs)}",
+                )
+            worker_kwargs = list(kwargs)
+        else:
+            raise ValueError(f"Unsupported reset kwargs type: {type(kwargs)}")
+
+        futures = [worker.reset.remote(worker_kwargs[i]) for i, worker in enumerate(self._workers)]
         print(f"DEBUG: Waiting for {len(futures)} workers to reset via ray.get...", flush=True)
         results = ray.get(futures)
         print("DEBUG: All workers reset successfully.", flush=True)
