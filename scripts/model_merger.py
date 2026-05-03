@@ -141,7 +141,7 @@ class BaseModelMerger(ABC):
         del model
 
         processor = hf_processor(self.hf_model_config_path)
-        tokenizer = hf_tokenizer(self.hf_model_config_path)
+        tokenizer = hf_tokenizer(self.hf_model_config_path, fix_mistral_regex=True)
         if processor is not None:
             print(f"Saving processor to {self.config.target_dir}")
             processor.save_pretrained(self.config.target_dir)

@@ -151,47 +151,55 @@ class RulebasedAgentSkill:
             accessible_objects = {obj.get("name"): obj for obj in accessible if obj.get("name") not in OTHER_OBJECTS}
         
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
+        rusted_key_in_hand = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3])
+        rusted_key_accessible = any(key in accessible_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3])
+        clean_key_in_hand = KEY_NO_RUST in inv_objects
+        clean_key_accessible = KEY_NO_RUST in accessible_objects
         
-        if RUSTED_KEY not in inv_objects and KEY_NO_RUST not in inv_objects and location != (17, 12):
+        # Read state from info (not from env global state)
+        is_key_in_jar = info.get("is_key_in_jar", False)
+        used_dispensers = info.get("used_dispensers", {})
+        
+        if not rusted_key_in_hand and not clean_key_in_hand and location != (17, 12):
             return self.skill("move_to_key")
         
-        if location == (17, 12) and RUSTED_KEY in accessible_objects:
-            if JAR not in inv_objects and self.env.is_key_in_jar:
+        if location == (17, 12) and rusted_key_accessible:
+            if JAR not in inv_objects and is_key_in_jar:
                 return self.skill("pick_up_jar")
-            if not self.env.is_key_in_jar:
+            if not is_key_in_jar:
                 return self.skill("pick_up_key")
         
-        if RUSTED_KEY in inv_objects and JAR not in inv_objects:
+        if rusted_key_in_hand and JAR not in inv_objects:
             if location != (17, 12):
                 return self.skill("move_to_jar")
             else:
                 return self.skill("pick_up_jar")
         
-        if RUSTED_KEY in inv_objects and JAR in inv_objects and not self.env.is_key_in_jar:
+        if rusted_key_in_hand and JAR in inv_objects and not is_key_in_jar:
             return self.skill("put_key_in_jar")
         
         other_dispenser_ids = [i for i in ["A", "B", "C", "D"] if i != self.env_solution]
-        used_other_dispensers = any(self.env.used_dispensers[x] for x in other_dispenser_ids)
+        used_other_dispensers = any(used_dispensers.get(x, False) for x in other_dispenser_ids)
         target_dispenser_location = {
             "A": (18, 12),
             "B": (19, 12),
             "C": (20, 12),
             "D": (21, 12),
         }[self.env_solution]
-        
-        rusted_key_in_hand = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3])
-        
-        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location != target_dispenser_location and not used_other_dispensers:
+
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location != target_dispenser_location and not used_other_dispensers:
             return self.skill(f"move_to_dispenser_{self.env_solution}")
         
-        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location == target_dispenser_location:
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location == target_dispenser_location:
             return self.skill(f"use_dispenser_{self.env_solution}_on_jar")
         
-        if self.env.is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_other_dispensers:
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_other_dispensers:
             return self.skill("wash_jar")
         
         if KEY_NO_RUST in inv_objects:
             return self.skill("open_door")
+        
+        return None
     
 
 if __name__ == "__main__":

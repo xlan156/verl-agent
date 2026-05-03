@@ -65,7 +65,7 @@ def main_task(config):
 
     local_path = copy_to_local(config.model.path)
     trust_remote_code = config.data.get("trust_remote_code", False)
-    tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
+    tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code, fix_mistral_regex=True)
 
     if config.rollout.temperature == 0.0:
         assert config.data.n_samples == 1, "When temperature=0, n_samples must be 1."

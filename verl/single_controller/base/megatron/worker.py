@@ -56,7 +56,7 @@ class MegatronWorker(Worker):
 
         # Step 1: initialize the tokenizer
         self.local_path = copy_to_local(model_path)
-        self.tokenizer = hf_tokenizer(self.local_path, trust_remote_code=trust_remote_code)
+        self.tokenizer = hf_tokenizer(self.local_path, trust_remote_code=trust_remote_code, fix_mistral_regex=True)
 
         # Step 2: get the hf
         hf_config = AutoConfig.from_pretrained(self.local_path, trust_remote_code=trust_remote_code)
