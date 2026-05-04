@@ -84,3 +84,92 @@ uuid_to_name = {
     "51739": "Bottle Cleaner",
     "18573": "Door",
 }
+
+SKILL_ALIASES = {
+    "move_to_key": [
+        "move to key",
+        "go to key",
+        "walk to key",
+        "navigate to key",
+    ],
+    "move_to_jar": [
+        "move to jar",
+        "go to jar",
+        "walk to jar",
+        "navigate to jar",
+    ],
+    "move_to_dispenser_A": [
+        "move to dispenser a",
+        "go to dispenser a",
+        "move to A dispenser",
+        "move to dispenser A",
+    ],
+    "move_to_dispenser_B": [
+        "move to dispenser b",
+        "go to dispenser b",
+        "move to B dispenser",
+        "move to dispenser B",
+    ],
+    "move_to_dispenser_C": [
+        "move to dispenser c",
+        "go to dispenser c",
+        "move to C dispenser",
+        "move to dispenser C",
+    ],
+    "move_to_dispenser_D": [
+        "move to dispenser d",
+        "go to dispenser d",
+        "move to D dispenser",
+        "move to dispenser D",
+    ],
+    "pick_up_key": [
+        "pick up key",
+        "pickup key",
+        "take key",
+        "grab key",
+    ],
+    "put_key_in_jar": [
+        "put key in jar",
+        "place key in jar",
+        "insert key into jar",
+    ],
+    "pick_up_jar": [
+        "pick up jar",
+        "pickup jar",
+        "take jar",
+        "grab jar",
+    ],
+    "use_dispenser_A_on_jar": [
+        "use dispenser A on jar",
+        "use A dispenser on jar",
+        "dispense A into jar",
+        "use the dispenser A to deliver substance A to the jar",
+    ],
+    "use_dispenser_B_on_jar": [
+        "use dispenser B on jar",
+        "use B dispenser on jar",
+        "dispense B into jar",
+        "use the dispenser B to deliver substance B to the jar",
+    ],
+    "use_dispenser_C_on_jar": [
+        "use dispenser C on jar",
+        "use C dispenser on jar",
+        "dispense C into jar",
+        "use the dispenser C to deliver substance C to the jar",
+    ],
+    "use_dispenser_D_on_jar": [
+        "use dispenser D on jar",
+        "use D dispenser on jar",
+        "dispense D into jar",
+        "use the dispenser D to deliver substance D to the jar",
+    ],
+    "wash_jar": [
+        "wash jar",
+        "clean jar",
+        "rinse jar",
+    ],
+    "open_door": [
+        "open door",
+        "open the door",
+    ],
+}

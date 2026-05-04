@@ -383,7 +383,7 @@ class DiscoveryWorldEnv:
             return 0.0
         
         if skill_name == teacher_skill:
-            return 0.4
+            return 0.7
         else:
             return -0.05
 
@@ -433,22 +433,20 @@ class DiscoveryWorldEnv:
             reward += 0.4
         return reward
     
-    def _no_progress_move_penalty(self, cur_score) -> float:
+    def _no_progress_move_penalty(self, action, cur_score) -> float:
         """Penalty for moving but making no progress."""
         if len(self.location_history) < 4:
             return 0.0
 
-        recent_move = self.action_history[-1] in {
-            "move_to_key", "move_to_jar",
-            "move_to_dispensers_A", "move_to_dispensers_B",
-            "move_to_dispensers_C", "move_to_dispensers_D"
-        }
-
         no_location_change = len(set(self.location_history[-4:])) == 1
         no_score_change = abs(cur_score - self._prev_score) < 1e-6
 
-        if recent_move and no_score_change:
-            return -0.2
+        if no_score_change:
+            if no_location_change:
+                return -0.3
+            elif len(self.action_history) >= 2 and action == self.action_history[-2]: # Encourage trying different actions at each step
+                return -0.15
+            return -0.1
         return 0.0
 
     def clip_reward(self, reward):
@@ -468,7 +466,7 @@ class DiscoveryWorldEnv:
         
         repetition_penalty = self._repetition_penalty()
         invalid_penalty = self._invalid_action_penalty(info)
-        no_progress_penalty = self._no_progress_move_penalty(cur_score)
+        no_progress_penalty = self._no_progress_move_penalty(skill_name, cur_score)
         info["teacher_skill"] = self._last_teacher_skill
 
         task_completed = bool(self._api.areTasksComplete())
@@ -477,7 +475,7 @@ class DiscoveryWorldEnv:
 
         reward = 0.0
         # Positive rewards
-        reward += 8.0 * game_progress_reward
+        reward += 10.0 * game_progress_reward
         reward += teacher_skill_reward
         reward += stage_reward
 
