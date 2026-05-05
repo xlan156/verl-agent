@@ -86,7 +86,8 @@ def discoveryworld_projection(
         info = infos[i] if infos else {}
         ui = (info.get("raw_observation") or {}).get("ui", {})
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
-        skill = _find_matching_skill(action_text=action, info=info, threshold=0.6)
+        #skill = _find_matching_skill(action_text=action, info=info, threshold=0.6)
+        skill = action if action in SKILL_ALIASES else None
         if skill is None:
             processed.append("Invalid action")
             valids.append(0)
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     
     obs, info = env.reset()
     sample_actions = [
-        "move_to_key\nput_key_in_jar\nuse_dispenser_A"
+        "move_to_key\nput_key_in_jar\nuse_dispenser_A_on_jar"
     ]
     
     projected, valids = discoveryworld_projection(sample_actions, infos=[info])

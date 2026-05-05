@@ -13,6 +13,7 @@ import re
 import time
 from collections import defaultdict
 import ray
+import random
 import torch
 import math
 import numpy as np
@@ -169,8 +170,8 @@ class DiscoveryWorldEnv:
         location = (ui.get("agentLocation", {}).get("x"), ui.get("agentLocation", {}).get("y"))
         self.location_history.append(location)
 
-    def _compute_key_jar_status(self, ui: Dict[str, Any]) -> Tuple[bool, bool, bool]:
-        """Derive (has_key, has_jar, is_key_in_jar) from raw UI in info."""
+    def _detail_status(self, ui: Dict[str, Any]) -> Tuple[bool, bool, bool, List[str]]:
+        """Derive (has_key, has_jar, is_key_in_jar, substances) from raw UI in info."""
         inventory = ui.get("inventoryObjects", [])
         accessible = ui.get("accessibleEnvironmentObjects", [])
 
@@ -182,17 +183,18 @@ class DiscoveryWorldEnv:
                     is_key_in_jar = True
                     break
 
-        inv_objects = {obj.get("name"): obj for obj in inventory or []}
+        inv_objects = {obj.get("name") for obj in inventory or []}
         has_key = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST])
         has_jar = JAR in inv_objects
+
         return has_key, has_jar, is_key_in_jar
 
     def _update_state_from_info(self, info: Dict[str, Any]) -> None:
         """Update location history and compute+inject key/jar state from raw UI."""
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_location_history(ui)
-        # compute key/jar flags and inject into info
-        has_key, has_jar, is_key_in_jar = self._compute_key_jar_status(ui)
+
+        has_key, has_jar, is_key_in_jar = self._detail_status(ui)
         info["has_key"] = has_key
         info["has_jar"] = has_jar
         info["is_key_in_jar"] = is_key_in_jar
@@ -476,7 +478,7 @@ class DiscoveryWorldEnv:
         reward = 0.0
         # Positive rewards
         reward += 10.0 * game_progress_reward
-        reward += teacher_skill_reward
+        # reward += teacher_skill_reward
         reward += stage_reward
 
         # Penalties
@@ -570,8 +572,11 @@ class DiscoveryWorldVectorEnv:
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)
         for i in range(self.num_processes):
             # Share seed across group_n replicas
-            worker_seed = seed + (i // self.group_n)
-            worker = env_worker.remote(worker_seed, env_kwargs, i)
+            if self.is_train:
+                worker_seed = random.choice([0, 1, 3])
+            else:
+                worker_seed = random.choice([2, 4])
+            worker = env_worker.remote(seed=worker_seed, env_kwargs=env_kwargs, thread_id=i)
             self._workers.append(worker)
 
 

@@ -1,5 +1,6 @@
 from agent_system.environments.env_package.discovery.helpers import all_action_abbr
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistryEasySkill
+import random
 
 DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
 RUSTED_KEY = "rusted key (heavily rusted)"
@@ -124,14 +125,6 @@ class RulebasedAgentSkill:
     def __init__(self, env):
         self.env = env
         self.skill_counter = {}
-        self.solutions = {
-            0: "B",
-            1: "D",
-            2: "C",
-            3: "A",
-            4: "C",
-        }
-        self.env_solution = self.solutions[self.env._seed % 5]
         
     def skill(self, skill_name):
         self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
@@ -156,7 +149,6 @@ class RulebasedAgentSkill:
         clean_key_in_hand = KEY_NO_RUST in inv_objects
         clean_key_accessible = KEY_NO_RUST in accessible_objects
         
-        # Read state from info (not from env global state)
         is_key_in_jar = info.get("is_key_in_jar", False)
         used_dispensers = info.get("used_dispensers", {})
         
@@ -178,22 +170,19 @@ class RulebasedAgentSkill:
         if rusted_key_in_hand and JAR in inv_objects and not is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        other_dispenser_ids = [i for i in ["A", "B", "C", "D"] if i != self.env_solution]
-        used_other_dispensers = any(used_dispensers.get(x, False) for x in other_dispenser_ids)
+        dispenser = random.choice(["A", "B", "C", "D"])
         target_dispenser_location = {
             "A": (18, 12),
             "B": (19, 12),
             "C": (20, 12),
             "D": (21, 12),
-        }[self.env_solution]
-
-        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location != target_dispenser_location and not used_other_dispensers:
-            return self.skill(f"move_to_dispenser_{self.env_solution}")
+        }[dispenser]
+        used_any_dispenser = any(used_dispensers.get(d) for d in ["A", "B", "C", "D"])
         
-        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and location == target_dispenser_location:
-            return self.skill(f"use_dispenser_{self.env_solution}_on_jar")
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and not used_any_dispenser:
+            return self.skill(f"use_dispenser_{dispenser}_on_jar")
         
-        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_other_dispensers:
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_any_dispenser:
             return self.skill("wash_jar")
         
         if KEY_NO_RUST in inv_objects:

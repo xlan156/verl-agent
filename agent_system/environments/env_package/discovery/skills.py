@@ -26,7 +26,6 @@ class CombinatorialChemistryEasySkill():
             "open_door": self.open_door,
         }
         
-        # 为每个dispenser (A-D) 动态生成映射
         for i in ["A", "B", "C", "D"]:
             self.skill_mapping[f"move_to_dispenser_{i}"] = (
                 lambda d=i: self.move_to_dispenser(d)
