@@ -21,8 +21,9 @@ You are an expert agent in a room with a rusted key and a locked door.
 You need to 
 1. Find the key, pick it up and put it in the jar.
 2. Take the jar to the dispensers to derust the key.
-3. If the key is still rusted, use bottle cleaner to wash the jar, then take the jar to another dispenser to derust the key.
-4. When the key is derusted, open the door and exit.
+3. Total amount of chemicals in the jar must reach {chemical_N}.
+4. You can remove chemicals from the jar if you have excessive amount of chemicals.
+5. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}
@@ -34,14 +35,14 @@ move_to_key
 pick_up_key
 pick_up_jar
 put_key_in_jar
-move_to_dispenser_A
-move_to_dispenser_B
-move_to_dispenser_C
-move_to_dispenser_D
 use_dispenser_A
 use_dispenser_B
 use_dispenser_C
 use_dispenser_D
+remove_chemical_A
+remove_chemical_B
+remove_chemical_C
+remove_chemical_D
 wash_jar
 open_door
 
@@ -55,8 +56,9 @@ You are an expert agent in a room with a rusted key and a locked door.
 You need to 
 1. Find the key, pick it up and put it in the jar.
 2. Take the jar to the dispensers to derust the key.
-3. If the key is still rusted, use bottle cleaner to wash the jar, then take the jar to another dispenser to derust the key.
-4. When the key is derusted, open the door and exit.
+3. Total amount of chemicals in the jar must reach {chemical_N}.
+4. You can remove chemicals from the jar if you have excessive amount of chemicals.
+5. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}
@@ -73,14 +75,14 @@ move_to_key
 pick_up_key
 pick_up_jar
 put_key_in_jar
-move_to_dispenser_A
-move_to_dispenser_B
-move_to_dispenser_C
-move_to_dispenser_D
 use_dispenser_A
 use_dispenser_B
 use_dispenser_C
 use_dispenser_D
+remove_chemical_A
+remove_chemical_B
+remove_chemical_C
+remove_chemical_D
 wash_jar
 open_door
 

@@ -69,14 +69,13 @@ def sample_random_action(info: Dict[str, Any]) -> Dict[str, Any]:
 def simulate_llm_response(obs_text: str, info: Dict[str, Any]) -> str:
     """Simulate an LLM response: sometimes valid, sometimes malformed."""
     string_candidates = [
-        "pick up the key",
-        "move to the jar",
-        "put the key in the jar",
-        "move to dispenser A"
-        "use dispenser A on the jar",
-        "pick up the jar",
-        "move to the key",
-        "wash the jar"
+        "pick_up_key",
+        "move_to_key",
+        "pick_up_jar",
+        "put_key_in_jar",
+        "use_dispenser_A_on_jar",
+        "use_dispenser_B_on_jar",
+        "use_dispenser_C_on_jar",
     ]
     out = random.choice(string_candidates)
     return out

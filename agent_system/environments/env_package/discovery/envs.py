@@ -13,7 +13,7 @@ import re
 import time
 from collections import defaultdict
 import ray
-import random
+from copy import deepcopy
 import torch
 import math
 import numpy as np
@@ -22,7 +22,8 @@ from agent_system.environments.env_package.discovery.discoveryworld.discoverywor
     DiscoveryWorldAPI,
 )
 from agent_system.environments.env_package.discovery.rule_based_agent import *
-from agent_system.environments.env_package.discovery.skills import CombinatorialChemistryEasySkill
+from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
+from agent_system.environments.env_package.discovery.seed import assign_split_seeds
 
 
 def _slugify(value: Optional[str]) -> str:
@@ -45,34 +46,6 @@ def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> 
     )
 
 
-def _strip_uuid(text: str) -> str:
-    if not text:
-        return text
-    return re.sub(r"\s*\[uuid:\s*[^\]]+\]", "", text).strip()
-
-
-
-IGNORED_OBJECT_NAMES = {"floor", "wall", "grass", "path", "table"}
-INVALID_MESSAGE = "Invalid action or argument"
-SKILL_TO_CATEGORY = {
-    "move_to_key": "MOVE",
-    "move_to_jar": "MOVE",
-    "move_to_dispenser_A": "MOVE",
-    "move_to_dispenser_B": "MOVE",
-    "move_to_dispenser_C": "MOVE",
-    "move_to_dispenser_D": "MOVE",
-    "pick_up_key": "PICKUP_KEY",
-    "put_key_in_jar": "PUT",
-    "pick_up_jar": "PICKUP_JAR",
-    "use_dispenser_A_on_jar": "USE",
-    "use_dispenser_B_on_jar": "USE",
-    "use_dispenser_C_on_jar": "USE",
-    "use_dispenser_D_on_jar": "USE",
-    "wash_jar": "USE",
-    "open_door": "OPEN",
-}
-
-
 class DiscoveryWorldEnv:
 
     def __init__(
@@ -84,6 +57,7 @@ class DiscoveryWorldEnv:
         thread_id: int = 0,
         save_frames: bool = False,
         frames_dir: Optional[str] = None,
+        chemical_N: int = 2,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -92,6 +66,7 @@ class DiscoveryWorldEnv:
         self._thread_id = thread_id
         self._save_frames = bool(save_frames)
         self._frames_dir = frames_dir
+        self._chemical_N = chemical_N
 
         self._api: Optional[DiscoveryWorldAPI] = None
         self._steps: int = 0
@@ -104,11 +79,19 @@ class DiscoveryWorldEnv:
         self._api.save_frames = self._save_frames
         if self._frames_dir:
             self._api.FRAME_DIR = os.path.join(self._frames_dir, f"thread-{self._thread_id}")
+        
+        scenario_args = {
+            "numChemicals": 4,
+            "minChemicals": 1,
+            "chemicalMinAmount": self._chemical_N,
+            "chemicalMaxAmount": self._chemical_N,
+        }
         ok = self._api.loadScenario(
             scenarioName=self._scenario_name,
             difficultyStr=self._difficulty,
             randomSeed=self._seed,
             numUserAgents=1,
+            **scenario_args,
         )
         if not ok:
             raise RuntimeError(
@@ -121,18 +104,12 @@ class DiscoveryWorldEnv:
         self.action_history: List[Optional[str]] = []
         self.location_history: List[Tuple[Optional[int], Optional[int]]] = []
 
-        self._skill_runner = CombinatorialChemistryEasySkill(self)
+        self._skill_runner = CombinatorialChemistrySkill(self)
         self.teacher = RulebasedAgentSkill(self)
         self._last_teacher_skill: Optional[str] = None
         self._last_info: Optional[Dict[str, Any]] = None
 
         self.used_dispensers = {"A": False, "B": False, "C": False, "D": False}
-
-    def _set_reset_context(self, kwargs: Optional[Dict[str, Any]]) -> None:
-        if isinstance(kwargs, dict):
-            self.train_epoch = kwargs.get("train_epoch")
-        else:
-            self.train_epoch = None
 
     def _score_normalized(self) -> float:
         assert self._api is not None
@@ -147,7 +124,7 @@ class DiscoveryWorldEnv:
         observation = self._api.getAgentObservation(agentIdx=0)
         ui = observation.get("ui", {})
 
-        text_obs = json.dumps(self.compress_ui_observation(ui), indent=2, sort_keys=True)
+        text_obs = json.dumps(compress_ui_observation(ui), indent=2, sort_keys=True)
 
         task_desc = ui.get("taskProgress", [])[0].get("description") if ui.get("taskProgress") else ""
 
@@ -170,122 +147,16 @@ class DiscoveryWorldEnv:
         location = (ui.get("agentLocation", {}).get("x"), ui.get("agentLocation", {}).get("y"))
         self.location_history.append(location)
 
-    def _detail_status(self, ui: Dict[str, Any]) -> Tuple[bool, bool, bool, List[str]]:
-        """Derive (has_key, has_jar, is_key_in_jar, substances) from raw UI in info."""
-        inventory = ui.get("inventoryObjects", [])
-        accessible = ui.get("accessibleEnvironmentObjects", [])
-
-        is_key_in_jar = False
-        for obj in inventory + accessible:
-            if any(obj.get("name") == key for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]):
-                description = obj.get("description", "")
-                if "in jar" in description:
-                    is_key_in_jar = True
-                    break
-
-        inv_objects = {obj.get("name") for obj in inventory or []}
-        has_key = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST])
-        has_jar = JAR in inv_objects
-
-        return has_key, has_jar, is_key_in_jar
-
     def _update_state_from_info(self, info: Dict[str, Any]) -> None:
         """Update location history and compute+inject key/jar state from raw UI."""
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_location_history(ui)
 
-        has_key, has_jar, is_key_in_jar = self._detail_status(ui)
+        has_key, has_jar, is_key_in_jar, chemical_dict = extract_detailed_status(ui)
         info["has_key"] = has_key
         info["has_jar"] = has_jar
         info["is_key_in_jar"] = is_key_in_jar
-
-    @staticmethod
-    def compress_ui_observation(ui_obs: dict) -> str:
-        """
-        Compress UI observation from ~4000 tokens to <500 tokens.
-        Convert verbose UI JSON into a compact structural text representation.
-        """
-        lines = []
-        
-        # 1. Agent Location (concise)
-        loc = ui_obs.get("agentLocation", {})
-        if loc:
-            facing = loc.get("faceDirection", "unknown")
-            can_move = ", ".join(loc.get("directions_you_can_move", []))
-            blocked = ", ".join(loc.get("directions_blocked", []))
-            lines.append(f"Location: ({loc.get('x', '?')}, {loc.get('y', '?')}), facing {facing}")
-            if can_move:
-                lines.append(f"Can move: {can_move}")
-            if blocked:
-                lines.append(f"Blocked: {blocked}")
-        
-        # 2. Inventory
-        inventory = ui_obs.get("inventoryObjects", [])
-        if inventory:
-            items = [_strip_uuid(f"{obj.get('description', '')}")
-                     for obj in inventory if obj.get("name") not in IGNORED_OBJECT_NAMES]
-            lines.append(f"Inventory: {', '.join(items)}")
-        else:
-            lines.append("Inventory: empty")
-        
-        # 3. Accessible Objects
-        accessible = ui_obs.get("accessibleEnvironmentObjects", [])
-        accessible_objects = [_strip_uuid(f"{obj.get('description', '')}")
-                              for obj in accessible if obj.get("name") not in IGNORED_OBJECT_NAMES]
-        if accessible_objects:
-            lines.append(f"Accessible: {', '.join(accessible_objects)}")
-        else:
-            lines.append("Accessible: no object is accessible in current location and facing direction")
-        
-        # 4. Nearby Objects (only interesting objects within certain steps, grouped by direction)
-        nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
-        lines.append("Nearby objects:")
-        for direction, objects in nearby.items():
-            for obj in objects:
-                distance = obj.get("distance", 99)
-                if distance <= 2 and obj.get("name") not in IGNORED_OBJECT_NAMES:
-                    desc = _strip_uuid(f"{obj.get('description', '')}")
-                    lines.append(f"- {direction} ({distance} tile(s) away): {desc}")
-        
-        # 5. Nearby Agents (only if non-empty and has actions)
-        nearby_agents = ui_obs.get("nearbyAgents", {}).get("list_of_agents", {})
-        if nearby_agents:
-            agent_names = [name for name, actions in nearby_agents.items() if actions]
-            if agent_names:
-                lines.append(f"Agents nearby: {', '.join(agent_names)}")
-        
-        # 6. Discovery Feed (only recent non-trivial posts)
-        feed = ui_obs.get("discoveryFeed", {})
-        posts = feed.get("posts", [])
-        articles = feed.get("scientific_articles", [])
-        
-        if len(posts) > 1:  # More than just welcome message
-            recent_posts = [f"{p.get('author', 'Unknown')}: {p.get('content', '')}" 
-                        for p in posts[-3:]]  # Last 3 posts
-            lines.append(f"\nRecent posts: {'; '.join(recent_posts)}")
-        
-        if articles:
-            lines.append(f"Scientific articles available: {len(articles)}")
-        
-        # 7. Dialog (only if active)
-        dialog = ui_obs.get("dialog_box", {})
-        if dialog.get("is_in_dialog", False):
-            lines.append("\nIN DIALOG")
-        
-        # 8. Action messages (only if non-empty)
-        last_msg = ui_obs.get("lastActionMessage", "")
-        extended_msg = ui_obs.get("extended_action_message", "")
-        if last_msg:
-            lines.append(f"\nLast action: {last_msg}")
-        if extended_msg:
-            lines.append(f"Extended info: {extended_msg}")
-        
-        # 9. Task Progress (concise)
-        task_progress = ui_obs.get("taskProgress", [])[0] if ui_obs.get("taskProgress") else {}
-        success = task_progress.get("completed", False)
-        lines.append(f"\nTask completed: {success}")
-        
-        return "\n".join(lines)
+        info["chemical_dict"] = deepcopy(chemical_dict)
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
         """Reset environment and return initial observation and info."""
@@ -300,7 +171,7 @@ class DiscoveryWorldEnv:
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_state_from_info(info)
         
-        self._last_info = info
+        self._last_info = deepcopy(info)
         self._prev_score = float(info.get("score_normalized", 0.0))
         if not self.location_history:
             self._update_location_history(ui)
@@ -312,7 +183,7 @@ class DiscoveryWorldEnv:
         assert self._api is not None
 
         action_text = action
-        skill_name = action_text if isinstance(action_text, str) and action_text in SKILL_TO_CATEGORY else None
+        skill_name = action_text if isinstance(action_text, str) and action_text in SKILL_NAMES else None
         is_valid = bool(skill_name)
 
         # Invalid action path
@@ -325,12 +196,12 @@ class DiscoveryWorldEnv:
             self._update_state_from_info(info)
             
             reward, done = self._compute_step_reward(None, info)
-            self._last_info = info
+            self._last_info = deepcopy(info)
             return text_obs, reward, done, info
 
         # Valid action: execute skill
         if self._skill_runner is None:
-            self._skill_runner = CombinatorialChemistryEasySkill(self)
+            self._skill_runner = CombinatorialChemistrySkill(self)
 
         try:
             skill_fn = self._skill_runner.skill_mapping.get(skill_name)
@@ -355,7 +226,7 @@ class DiscoveryWorldEnv:
         self._update_state_from_info(info)
         
         reward, done = self._compute_step_reward(skill_name, info)
-        self._last_info = info
+        self._last_info = deepcopy(info)
         
         return text_obs, reward, done, info
 
@@ -369,7 +240,6 @@ class DiscoveryWorldEnv:
         return reward
     
     def _teacher_skill_reward(self, skill_name: Optional[str], info: Dict[str, Any]) -> float:
-        """Compute teacher-alignment reward using last_info as teacher context."""
         teacher_skill = self.teacher.select_skill(self._last_info)
         self._last_teacher_skill = teacher_skill
         
@@ -377,7 +247,7 @@ class DiscoveryWorldEnv:
             # Log cases where teacher couldn't decide
             with open("teacher_skill.txt", "a") as f:
                 ui = (info.get("raw_observation") or {}).get("ui", {})
-                compressed_obs = self.compress_ui_observation(ui)
+                compressed_obs = compress_ui_observation(ui)
                 f.write("======================\n")
                 f.write(f"Current is_key_in_jar: {info.get('is_key_in_jar', False)}\n")
                 f.write(f"Current used_dispensers: {info.get('used_dispensers', {})}\n")
@@ -390,7 +260,6 @@ class DiscoveryWorldEnv:
             return -0.05
 
     def _repetition_penalty(self) -> float:
-        """Penalty for repeating the same action."""
         penalty = 0.0
         if len(self.action_history) >= 3 and len(set(self.action_history[-3:])) == 1:
             penalty = -0.1
@@ -479,7 +348,7 @@ class DiscoveryWorldEnv:
         # Positive rewards
         reward += 10.0 * game_progress_reward
         # reward += teacher_skill_reward
-        reward += stage_reward
+        # reward += stage_reward
 
         # Penalties
         reward += repetition_penalty
@@ -489,7 +358,7 @@ class DiscoveryWorldEnv:
         if not task_completed:
             reward = self.clip_reward(reward)
         else:
-            reward += 5.0
+            reward += 10.0
 
         return reward, done
 
@@ -518,6 +387,7 @@ class DiscoveryWorldWorker:
             thread_id=thread_id,
             save_frames=save_frames,
             frames_dir=frames_dir,
+            **env_kwargs,
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
@@ -569,13 +439,28 @@ class DiscoveryWorldVectorEnv:
             env_kwargs["frames_dir"] = _build_frames_dir(env_kwargs, seed, is_train)
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
+        configured_train_size = int(env_kwargs.get("train_size", self.env_num))
+        configured_val_size = int(env_kwargs.get("val_size", self.env_num))
+        configured_chemical_n = int(env_kwargs.get("chemical_N", 2))
+        split_seeds = assign_split_seeds(
+            base_seed=seed,
+            train_size=configured_train_size,
+            val_size=configured_val_size,
+            num_chemicals=4,
+            min_chemicals=1,
+            min_amount=configured_chemical_n,
+            max_amount=configured_chemical_n,
+        )
+        selected_split = "train" if self.is_train else "val"
+        split_seed_list = split_seeds[selected_split]
+        if not split_seed_list:
+            split_seed_list = [int(seed)]
+
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)
         for i in range(self.num_processes):
-            # Share seed across group_n replicas
-            if self.is_train:
-                worker_seed = random.choice([0, 1, 3])
-            else:
-                worker_seed = random.choice([2, 4])
+            # Share seed across group_n replicas while keeping train/val seed ranges isolated.
+            seed_idx = (i // self.group_n) % len(split_seed_list)
+            worker_seed = int(split_seed_list[seed_idx])
             worker = env_worker.remote(seed=worker_seed, env_kwargs=env_kwargs, thread_id=i)
             self._workers.append(worker)
 

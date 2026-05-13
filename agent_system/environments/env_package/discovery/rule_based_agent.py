@@ -1,16 +1,7 @@
-from agent_system.environments.env_package.discovery.helpers import all_action_abbr
-from agent_system.environments.env_package.discovery.skills import CombinatorialChemistryEasySkill
+from agent_system.environments.env_package.discovery.helpers import *
+from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 import random
-
-DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
-RUSTED_KEY = "rusted key (heavily rusted)"
-RUSTED_KEY_2 = "rusted key (moderately rusted)"
-RUSTED_KEY_3 = "rusted key (lightly rusted)"
-KEY_NO_RUST = "key (no rust)"
-JAR = "jar"
-DOOR = "door"
-TABLE = "table"
-OTHER_OBJECTS = ["wall", "floor", "path", "grass"]
+from copy import deepcopy
 
 class RulebasedAgent:
     """
@@ -170,23 +161,41 @@ class RulebasedAgentSkill:
         if rusted_key_in_hand and JAR in inv_objects and not is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        dispenser = random.choice(["A", "B", "C", "D"])
-        target_dispenser_location = {
-            "A": (18, 12),
-            "B": (19, 12),
-            "C": (20, 12),
-            "D": (21, 12),
-        }[dispenser]
-        used_any_dispenser = any(used_dispensers.get(d) for d in ["A", "B", "C", "D"])
+        if self.env._chemical_N == 1:
+            chem = random.choice(["A", "B", "C", "D"])
+            target_dispenser_location = {
+                "A": (18, 12),
+                "B": (19, 12),
+                "C": (20, 12),
+                "D": (21, 12),
+            }[chem]
+            used_any_dispenser = any(used_dispensers.get(d) for d in ["A", "B", "C", "D"])
+            
+            if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and not used_any_dispenser:
+                return self.skill(f"use_dispenser_{chem}_on_jar")
+            
+            if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_any_dispenser:
+                return self.skill("wash_jar")
+            
+            if KEY_NO_RUST in inv_objects:
+                return self.skill("open_door")
         
-        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and not used_any_dispenser:
-            return self.skill(f"use_dispenser_{dispenser}_on_jar")
-        
-        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_any_dispenser:
-            return self.skill("wash_jar")
-        
-        if KEY_NO_RUST in inv_objects:
-            return self.skill("open_door")
+        if self.env._chemical_N > 1:
+            chem = random.choice(["A", "B", "C", "D"])
+            sum_chemical_dict = sum(info.get("chemical_dict", {}).values())
+            if sum_chemical_dict < self.env._chemical_N:
+                if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
+                    return self.skill(f"use_dispenser_{chem}_on_jar")
+                if KEY_NO_RUST in inv_objects:
+                    return self.skill("open_door")
+            else:
+                curr_dict = deepcopy(info.get("chemical_dict", {}))
+                available_chems = [chem for chem, count in curr_dict.items() if count > 0]
+                chem = random.choice(available_chems)
+                if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
+                    return self.skill(f"remove_chemical_{chem}")
+                if KEY_NO_RUST in inv_objects:
+                    return self.skill("open_door")
         
         return None
     
@@ -195,9 +204,10 @@ if __name__ == "__main__":
     from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
     env = DiscoveryWorldEnv(
         scenario_name="Combinatorial Chemistry",
-        difficulty="Easy",
-        seed=2,
-        max_steps=50,
+        difficulty="Challenge",
+        seed=17,
+        max_steps=70,
+        chemical_N=3,
     )
     agent = RulebasedAgentSkill(env)
 

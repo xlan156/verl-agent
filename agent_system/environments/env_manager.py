@@ -631,8 +631,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        from agent_system.environments.env_package.discovery.helpers import all_action_abbr, all_plausible_action_mapper, all_plausible_action_mapper_no_uuid
-        self.all_actions = all_plausible_action_mapper_no_uuid
+        from agent_system.environments.env_package.discovery.helpers import all_action_abbr
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
@@ -668,6 +667,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
         postprocess_text_obs: List[str] = []
+        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
+        chemical_n = getattr(discovery_cfg, "chemical_N", 2)
 
         if not init and self.config.env.history_length > 0:
             memory_contexts, valid_lens = self.memory.fetch(
@@ -684,6 +685,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
+                    chemical_N=chemical_n,
                     state_obs=state_obs,
                     step_info=step_info,
                 )
@@ -692,6 +694,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 recent_actions = [record.get("action") for record in self.memory[i][-3:]]
                 memory_actions = "\n".join(a for a in recent_actions if a)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
+                    chemical_N=chemical_n,
                     state_obs=state_obs,
                     step_info=step_info,
                     memory_actions=memory_actions,
@@ -807,7 +810,8 @@ def make_envs(config):
         # Optional nested config: env.discoveryworld.{scenario_name,difficulty}
         discovery_cfg = getattr(config.env, "discoveryworld", None)
         scenario_name = getattr(discovery_cfg, "scenario_name", "Combinatorial Chemistry")
-        difficulty = getattr(discovery_cfg, "difficulty", "Easy")
+        difficulty = getattr(discovery_cfg, "difficulty", "Challenge")
+        chemical_N = getattr(discovery_cfg, "chemical_N", 2)
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
 
@@ -815,6 +819,9 @@ def make_envs(config):
             "scenario_name": scenario_name,
             "difficulty": difficulty,
             "max_steps": config.env.max_steps,
+            "train_size": config.data.train_batch_size,
+            "val_size": config.data.val_batch_size,
+            "chemical_N": chemical_N
         }
         if save_frames is not None:
             env_kwargs["save_frames"] = bool(save_frames)

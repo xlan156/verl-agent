@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 from difflib import SequenceMatcher
-from agent_system.environments.env_package.discovery.helpers import SKILL_ALIASES
+from agent_system.environments.env_package.discovery.helpers import *
 
 
 def similar_string(str1: str, str2: str) -> bool:
@@ -42,7 +42,7 @@ def _extract_skill_from_json(text: str) -> Optional[str]:
     if isinstance(payload, dict):
         for key in ("skill", "action"):
             value = payload.get(key)
-            if isinstance(value, str) and value in SKILL_ALIASES:
+            if isinstance(value, str) and value in SKILL_NAMES:
                 return value
     return None
 
@@ -62,7 +62,7 @@ def _find_matching_skill(action_text: str, info: Dict, threshold: float = 0.6) -
     best_skill = None
     best_score = 0.0
 
-    for skill, aliases in SKILL_ALIASES.items():
+    for skill, aliases in SKILL_NAMES.items():
         for alias in aliases + [skill]:
             score = _string_similarity(normalized, _normalize_text(alias))
             if score > best_score:
@@ -87,7 +87,7 @@ def discoveryworld_projection(
         ui = (info.get("raw_observation") or {}).get("ui", {})
         location = (ui.get("agentLocation").get("x"), ui.get("agentLocation").get("y"))
         #skill = _find_matching_skill(action_text=action, info=info, threshold=0.6)
-        skill = action if action in SKILL_ALIASES else None
+        skill = action if action in SKILL_NAMES else None
         if skill is None:
             processed.append("Invalid action")
             valids.append(0)

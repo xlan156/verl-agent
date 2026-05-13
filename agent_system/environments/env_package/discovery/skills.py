@@ -1,21 +1,15 @@
 import random
+import re
 
-from agent_system.environments.env_package.discovery.helpers import all_action_abbr
+from agent_system.environments.env_package.discovery.helpers import *
 
-DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
-RUSTED_KEY = "rusted key (heavily rusted)"
-KEY_NO_RUST = "key (no rust)"
-JAR = "jar"
-DOOR = "door"
-TABLE = "table"
-OTHER_OBJECTS = ["wall", "floor", "path", "grass"]
-
-class CombinatorialChemistryEasySkill():
+class CombinatorialChemistrySkill():
     def __init__(self, env):
         self.env = env
         self.ui = self.env._api.getAgentObservation(agentIdx=0).get("ui")
         self.location = (self.ui.get("agentLocation").get("x"), self.ui.get("agentLocation").get("y"))
         self.action_space = all_action_abbr
+        self.chemical_dict = {"A": 0, "B": 0, "C": 0, "D": 0}
         self.skill_mapping = {
             "move_to_key": self.move_to_key,
             "move_to_jar": self.move_to_jar,
@@ -28,16 +22,20 @@ class CombinatorialChemistryEasySkill():
         
         for i in ["A", "B", "C", "D"]:
             self.skill_mapping[f"move_to_dispenser_{i}"] = (
-                lambda d=i: self.move_to_dispenser(d)
+                lambda x=i: self.move_to_dispenser(x)
             )
             self.skill_mapping[f"use_dispenser_{i}_on_jar"] = (
-                lambda d=i: self.use_dispenser_on_jar(d)
+                lambda x=i: self.use_dispenser_on_jar(x)
+            )
+            self.skill_mapping[f"remove_chemical_{i}"] = (
+                lambda x=i: self.remove_one_chemical(x)
             )
         self.skill_names = list(self.skill_mapping.keys())
     
     def update_ui_and_location(self):
         self.ui = self.env._api.getAgentObservation(agentIdx=0).get("ui")
         self.location = (self.ui.get("agentLocation").get("x"), self.ui.get("agentLocation").get("y"))
+        _, _, _, self.chemical_dict = extract_detailed_status(self.ui)
 
     def sample_random_skill(self):
         return random.choice(self.skill_names)
@@ -47,16 +45,6 @@ class CombinatorialChemistryEasySkill():
         self.env._last_action_result = result
         self.env._api.tick()
         self.update_ui_and_location()
-        
-    def get_inv_objects(self):
-        inventory = self.ui.get("inventoryObjects", [])
-        inv_objects = [obj.get("name") for obj in inventory]
-        return inv_objects
-    
-    def get_accessible_objects(self):
-        accessible = self.ui.get("accessibleEnvironmentObjects", [])
-        accessible_objects = [obj.get("name") for obj in accessible]
-        return accessible_objects
         
     def move_to_key(self):
         while self.location[1] == 12 and self.location[0] > 17:
@@ -123,8 +111,17 @@ class CombinatorialChemistryEasySkill():
             self.move_to_dispenser(dispenser_id)
             self.env.used_dispensers[dispenser_id] = True
             self.perform_action(self.action_space[action_key])
-            
-    
+       
+    def remove_one_chemical(self, chemical):    
+        target_dict = dict(self.chemical_dict)
+        if target_dict.get(chemical, 0) == 0:
+            return
+        target_dict[chemical] = target_dict[chemical] - 1
+        self.wash_jar()
+        for chem_id, count in target_dict.items():
+            for _ in range(count):
+                self.use_dispenser_on_jar(chem_id)
+        
     def wash_jar(self):
         while self.location[0] < 22 and self.location[1] == 12:
             self.perform_action(self.action_space["move_east"])
@@ -150,6 +147,22 @@ class CombinatorialChemistryEasySkill():
         self.perform_action(self.action_space["open_door"])
         self.perform_action(self.action_space["move_south"])
         self.perform_action(self.action_space["move_south"])
+
+
+if __name__ == "__main__":
+    from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
+    env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, chemical_N=2)
+    _, info = env.reset()
+    skill_agent = CombinatorialChemistrySkill(env)
+    skill_agent.move_to_key()
+    skill_agent.pick_up_key()
+    skill_agent.put_key_in_jar()
+    skill_agent.pick_up_jar()
+    skill_agent.use_dispenser_on_jar("A")
+    skill_agent.use_dispenser_on_jar("B")
+    skill_agent.use_dispenser_on_jar("C")
+    skill_agent.remove_one_chemical("B")
+    skill_agent.use_dispenser_on_jar("D")
     
     
         

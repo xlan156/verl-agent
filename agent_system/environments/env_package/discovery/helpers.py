@@ -1,3 +1,6 @@
+from typing import Dict, Any, List, Tuple, Optional
+import re
+
 all_plausible_action_json = [
     {"action": "PICKUP", "arg1": "33120"},
     {"action": "MOVE_DIRECTION", "arg1": "west"},
@@ -85,91 +88,154 @@ uuid_to_name = {
     "18573": "Door",
 }
 
-SKILL_ALIASES = {
-    "move_to_key": [
-        "move to key",
-        "go to key",
-        "walk to key",
-        "navigate to key",
-    ],
-    "move_to_jar": [
-        "move to jar",
-        "go to jar",
-        "walk to jar",
-        "navigate to jar",
-    ],
-    "move_to_dispenser_A": [
-        "move to dispenser a",
-        "go to dispenser a",
-        "move to A dispenser",
-        "move to dispenser A",
-    ],
-    "move_to_dispenser_B": [
-        "move to dispenser b",
-        "go to dispenser b",
-        "move to B dispenser",
-        "move to dispenser B",
-    ],
-    "move_to_dispenser_C": [
-        "move to dispenser c",
-        "go to dispenser c",
-        "move to C dispenser",
-        "move to dispenser C",
-    ],
-    "move_to_dispenser_D": [
-        "move to dispenser d",
-        "go to dispenser d",
-        "move to D dispenser",
-        "move to dispenser D",
-    ],
-    "pick_up_key": [
-        "pick up key",
-        "pickup key",
-        "take key",
-        "grab key",
-    ],
-    "put_key_in_jar": [
-        "put key in jar",
-        "place key in jar",
-        "insert key into jar",
-    ],
-    "pick_up_jar": [
-        "pick up jar",
-        "pickup jar",
-        "take jar",
-        "grab jar",
-    ],
-    "use_dispenser_A_on_jar": [
-        "use dispenser A on jar",
-        "use A dispenser on jar",
-        "dispense A into jar",
-        "use the dispenser A to deliver substance A to the jar",
-    ],
-    "use_dispenser_B_on_jar": [
-        "use dispenser B on jar",
-        "use B dispenser on jar",
-        "dispense B into jar",
-        "use the dispenser B to deliver substance B to the jar",
-    ],
-    "use_dispenser_C_on_jar": [
-        "use dispenser C on jar",
-        "use C dispenser on jar",
-        "dispense C into jar",
-        "use the dispenser C to deliver substance C to the jar",
-    ],
-    "use_dispenser_D_on_jar": [
-        "use dispenser D on jar",
-        "use D dispenser on jar",
-        "dispense D into jar",
-        "use the dispenser D to deliver substance D to the jar",
-    ],
-    "wash_jar": [
-        "wash jar",
-        "clean jar",
-        "rinse jar",
-    ],
-    "open_door": [
-        "open door",
-        "open the door",
-    ],
+DISPENSER_NAMES = ["Dispenser (Substance A)", "Dispenser (Substance B)", "Dispenser (Substance C)", "Dispenser (Substance D)"]
+RUSTED_KEY = "rusted key (heavily rusted)"
+RUSTED_KEY_2 = "rusted key (moderately rusted)"
+RUSTED_KEY_3 = "rusted key (lightly rusted)"
+KEY_NO_RUST = "key (no rust)"
+JAR = "jar"
+DOOR = "door"
+TABLE = "table"
+OTHER_OBJECTS = ["wall", "floor", "path", "grass", "table"]
+
+MOVE_TO_KEY = "move_to_key"
+MOVE_TO_JAR = "move_to_jar"
+PICK_UP_KEY = "pick_up_key"
+PICK_UP_JAR = "pick_up_jar"
+PUT_KEY_IN_JAR = "put_key_in_jar"
+USE_DISPENSER_A = "use_dispenser_A_on_jar"
+USE_DISPENSER_B = "use_dispenser_B_on_jar"
+USE_DISPENSER_C = "use_dispenser_C_on_jar"
+USE_DISPENSER_D = "use_dispenser_D_on_jar"
+REMOVE_CHEMICAL_A = "remove_chemical_A"
+REMOVE_CHEMICAL_B = "remove_chemical_B"
+REMOVE_CHEMICAL_C = "remove_chemical_C"
+REMOVE_CHEMICAL_D = "remove_chemical_D"
+WASH = "wash_jar"
+OPEN_DOOR = "open_door"
+
+SKILL_NAMES = {
+    MOVE_TO_KEY,
+    MOVE_TO_JAR,
+    PICK_UP_KEY,
+    PICK_UP_JAR,
+    PUT_KEY_IN_JAR,
+    USE_DISPENSER_A,
+    USE_DISPENSER_B,
+    USE_DISPENSER_C,
+    USE_DISPENSER_D,
+    REMOVE_CHEMICAL_A,
+    REMOVE_CHEMICAL_B,
+    REMOVE_CHEMICAL_C,
+    REMOVE_CHEMICAL_D,
+    WASH,
+    OPEN_DOOR
 }
+
+def extract_detailed_status(ui: Dict):
+    inventory = ui.get("inventoryObjects", [])
+    accessible = ui.get("accessibleEnvironmentObjects", [])
+
+    is_key_in_jar = False
+    for obj in inventory + accessible:
+        if any(obj.get("name") == key for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]):
+            description = obj.get("description", "")
+            if "in jar" in description:
+                is_key_in_jar = True
+                break
+
+    inv_objects = {obj.get("name") for obj in inventory or []}
+    has_key = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST])
+    has_jar = JAR in inv_objects
+    
+    chemical_dict = {"A": 0, "B": 0, "C": 0, "D": 0}
+    for s in ["A", "B", "C", "D"]:
+        if f"Substance {s}" in inv_objects:
+            chemical_dict[s] = 1
+    
+    for name in inv_objects:
+        if name.startswith("mixture"):
+            # Parse mixture names like "mixture (1 parts Substance A, 1 parts Substance B)"
+            m = re.search(r"mixture\s*\((.*)\)", name, flags=re.IGNORECASE)
+            if m:
+                inside = m.group(1)
+                parts = [p.strip() for p in inside.split(",") if p.strip()]
+                for part in parts:
+                    m2 = re.match(r"(\d+)\s+parts?\s+(.+)$", part)
+                    if m2:
+                        count = int(m2.group(1))
+                        subname = m2.group(2).strip()
+                        # Merge into substances dict (values are ints)
+                        chem = subname.split()[-1]  # Get last word, e.g. "A" from "Substance A"
+                        chemical_dict[chem] = chemical_dict.get(chem, 0) + count
+
+    return has_key, has_jar, is_key_in_jar, chemical_dict
+
+
+def compress_ui_observation(ui_obs: dict) -> str:
+    """
+    Compress UI observation from ~4000 tokens to <500 tokens.
+    Convert verbose UI JSON into a compact structural text representation.
+    """
+        
+    def _strip_uuid(text: str) -> str:
+        if not text:
+            return text
+        return re.sub(r"\s*\[uuid:\s*[^\]]+\]", "", text).strip()
+
+    lines = []
+    
+    # 1. Agent Location, facing direction
+    loc = ui_obs.get("agentLocation", {})
+    if loc:
+        facing = loc.get("faceDirection", "unknown")
+        can_move = ", ".join(loc.get("directions_you_can_move", []))
+        blocked = ", ".join(loc.get("directions_blocked", []))
+        lines.append(f"Location: ({loc.get('x', '?')}, {loc.get('y', '?')}), facing {facing}")
+        if can_move:
+            lines.append(f"Can move: {can_move}")
+        if blocked:
+            lines.append(f"Blocked: {blocked}")
+    
+    # 2. Inventory
+    inventory = ui_obs.get("inventoryObjects", [])
+    if inventory:
+        items = [_strip_uuid(f"{obj.get('description', '')}")
+                    for obj in inventory if obj.get("name") not in OTHER_OBJECTS]
+        lines.append(f"Inventory: {', '.join(items)}")
+    else:
+        lines.append("Inventory: empty")
+    
+    # 3. Accessible Objects
+    accessible = ui_obs.get("accessibleEnvironmentObjects", [])
+    accessible_objects = [_strip_uuid(f"{obj.get('description', '')}")
+                            for obj in accessible if obj.get("name") not in OTHER_OBJECTS]
+    if accessible_objects:
+        lines.append(f"Accessible: {', '.join(accessible_objects)}")
+    else:
+        lines.append("Accessible: no object is accessible in current location and facing direction")
+    
+    # 4. Nearby Objects (only interesting objects within certain steps, grouped by direction)
+    nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
+    lines.append("Nearby objects:")
+    for direction, objects in nearby.items():
+        for obj in objects:
+            distance = obj.get("distance", 99)
+            if distance <= 2 and obj.get("name") not in OTHER_OBJECTS:
+                desc = _strip_uuid(f"{obj.get('description', '')}")
+                lines.append(f"- {direction} ({distance} tile(s) away): {desc}")
+    
+    # 5. Action message
+    last_msg = ui_obs.get("lastActionMessage", "")
+    extended_msg = ui_obs.get("extended_action_message", "")
+    if last_msg:
+        lines.append(f"\nLast action message: {last_msg}")
+    if extended_msg:
+        lines.append(f"Extended info: {extended_msg}")
+    
+    # 6. Task completion
+    task_progress = ui_obs.get("taskProgress", [])[0] if ui_obs.get("taskProgress") else {}
+    success = task_progress.get("completed", False)
+    lines.append(f"\nTask completed: {success}")
+    
+    return "\n".join(lines)
