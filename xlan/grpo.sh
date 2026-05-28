@@ -30,16 +30,16 @@ model_name=Qwen2.5-0.5B-Instruct
 project_name="GRPO-discoveryworld"
 model_path="sft/models/SFT-${model_name}-merged"
 
-train_data_size=6
-val_data_size=30
+train_data_size=10
+val_data_size=10
 num_cpus_per_env_worker=0.1
-experiment_name="GRPO-SFT-${model_name}-0507"
+experiment_name="GRPO-SFT-${model_name}-0514"
 group_size=4
 num_gpus_per_node=1
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
-DIFFICULTY="${DIFFICULTY:-Easy}"
+DIFFICULTY="${DIFFICULTY:-Challenge}"
 
-python -m sft.SFTtrain
+#python -m sft.SFTtrain
 
 ray start --head \
     --port=$port \
@@ -94,7 +94,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=discoveryworld \
     env.seed=0 \
-    env.max_steps=40 \
+    env.max_steps=50 \
     env.rollout.n=$group_size \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
@@ -108,8 +108,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=5 \
-    trainer.test_freq=2 \
-    trainer.total_epochs=30 \
+    trainer.test_freq=5 \
+    trainer.total_epochs=20 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"
 

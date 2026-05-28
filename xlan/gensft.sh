@@ -12,14 +12,12 @@
 cd ~/projects/verl-agent
 source ~/venvs/verlagentdis/bin/activate
 
-python -m xlan-scripts.gensft \
+python -m xlan.gensft \
     --episodes 10 \
     --max-steps 70 \
-    --is-train False \
     --chemical-n 2 \
 
-python -m xlan-scripts.gensft \
+python -m xlan.gensft \
     --episodes 10 \
     --max-steps 70 \
-    --is-train False \
     --chemical-n 3 \

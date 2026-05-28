@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=100, help="Number of episodes to sample.")
     parser.add_argument("--seed", type=int, default=2, help="Env seed.")
     parser.add_argument("--max-steps", type=int, default=50, help="Max environment steps per episode.")
-    parser.add_argument("--is-train", type=bool, default=True, help="To generate training data or validation data.")
+    parser.add_argument("--is-train", action="store_true", help="Generate training data (default: validation data).")
     parser.add_argument("--chemical-n", type=int, default=2, help="Total chemical amount.")
     return parser.parse_args()
 

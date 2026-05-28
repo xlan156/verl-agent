@@ -23,7 +23,8 @@ You need to
 2. Take the jar to the dispensers to derust the key.
 3. Total amount of chemicals in the jar must reach {chemical_N}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+5. Curriculum start state: {curriculum_state}.
+6. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}
@@ -58,7 +59,8 @@ You need to
 2. Take the jar to the dispensers to derust the key.
 3. Total amount of chemicals in the jar must reach {chemical_N}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+5. Curriculum start state: {curriculum_state}.
+6. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}

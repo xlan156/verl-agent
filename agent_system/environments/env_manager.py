@@ -635,7 +635,17 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
-        text_obs, infos = self.envs.reset(kwargs=kwargs)
+        reset_kwargs = kwargs
+        if reset_kwargs is None:
+            discovery_cfg = getattr(self.config.env, "discoveryworld", None)
+            reset_kwargs = getattr(discovery_cfg, "curriculum_state", None)
+            if reset_kwargs is not None:
+                if isinstance(reset_kwargs, (list, tuple)) and reset_kwargs and isinstance(reset_kwargs[0], (list, tuple, dict)):
+                    reset_kwargs = list(reset_kwargs)
+                else:
+                    reset_kwargs = {"curriculum_state": reset_kwargs}
+
+        text_obs, infos = self.envs.reset(kwargs=reset_kwargs)
 
         self.memory.reset(batch_size=len(text_obs))
         self.tasks = [info.get("task_description", "") for info in infos]
@@ -668,7 +678,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
         postprocess_text_obs: List[str] = []
         discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-        chemical_n = getattr(discovery_cfg, "chemical_N", 2)
+        chemical_n = getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2))
 
         if not init and self.config.env.history_length > 0:
             memory_contexts, valid_lens = self.memory.fetch(
@@ -683,9 +693,11 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             state_obs = text_obs[i]
             state_obs = state_obs.replace("\\n", "\n")
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
+            curriculum_state = infos[i].get("curriculum_state_text") or infos[i].get("curriculum_state")
             if init or self.config.env.history_length <= 0 or memory_contexts is None:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     chemical_N=chemical_n,
+                    curriculum_state=curriculum_state or "None",
                     state_obs=state_obs,
                     step_info=step_info,
                 )
@@ -695,6 +707,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 memory_actions = "\n".join(a for a in recent_actions if a)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     chemical_N=chemical_n,
+                    curriculum_state=curriculum_state or "None",
                     state_obs=state_obs,
                     step_info=step_info,
                     memory_actions=memory_actions,
@@ -812,8 +825,16 @@ def make_envs(config):
         scenario_name = getattr(discovery_cfg, "scenario_name", "Combinatorial Chemistry")
         difficulty = getattr(discovery_cfg, "difficulty", "Challenge")
         chemical_N = getattr(discovery_cfg, "chemical_N", 2)
+        max_chemical_N = getattr(discovery_cfg, "max_chemical_N", chemical_N)
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
+        curriculum_cfg = getattr(discovery_cfg, "curriculum", None)
+        curriculum_enabled = bool(getattr(curriculum_cfg, "enabled", getattr(discovery_cfg, "curriculum_enabled", False)))
+        curriculum_stage = getattr(curriculum_cfg, "stage", getattr(discovery_cfg, "curriculum_stage", max_chemical_N))
+        curriculum_max_stage = getattr(curriculum_cfg, "max_stage", getattr(discovery_cfg, "curriculum_max_stage", max_chemical_N))
+        curriculum_train_fraction = getattr(curriculum_cfg, "train_fraction", getattr(discovery_cfg, "curriculum_train_fraction", 0.7))
+        curriculum_mix_ratios = getattr(curriculum_cfg, "mix_ratios", getattr(discovery_cfg, "curriculum_mix_ratios", (0.7, 0.2, 0.1)))
+        curriculum_seed = getattr(curriculum_cfg, "seed", getattr(discovery_cfg, "curriculum_seed", config.env.seed))
 
         env_kwargs = {
             "scenario_name": scenario_name,
@@ -821,7 +842,14 @@ def make_envs(config):
             "max_steps": config.env.max_steps,
             "train_size": config.data.train_batch_size,
             "val_size": config.data.val_batch_size,
-            "chemical_N": chemical_N
+            "chemical_N": chemical_N,
+            "max_chemical_N": max_chemical_N,
+            "curriculum_enabled": curriculum_enabled,
+            "curriculum_stage": curriculum_stage,
+            "curriculum_max_stage": curriculum_max_stage,
+            "curriculum_train_fraction": curriculum_train_fraction,
+            "curriculum_mix_ratios": curriculum_mix_ratios,
+            "curriculum_seed": curriculum_seed,
         }
         if save_frames is not None:
             env_kwargs["save_frames"] = bool(save_frames)

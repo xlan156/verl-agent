@@ -136,6 +136,37 @@ def extract_detailed_status(ui: Dict):
     inventory = ui.get("inventoryObjects", [])
     accessible = ui.get("accessibleEnvironmentObjects", [])
 
+    def _add_chemical_counts_from_name(name: str, chemical_dict: Dict[str, int]) -> None:
+        if not name:
+            return
+
+        normalized_name = name.strip()
+
+        pure_match = re.match(
+            r"^Substance\s+([A-D])(?:\s*\((\d+)\s+measures?\))?$",
+            normalized_name,
+            flags=re.IGNORECASE,
+        )
+        if pure_match:
+            chemical = pure_match.group(1).upper()
+            count = int(pure_match.group(2) or 1)
+            chemical_dict[chemical] = chemical_dict.get(chemical, 0) + count
+            return
+
+        mixture_match = re.match(r"^mixture\s*\((.*)\)$", normalized_name, flags=re.IGNORECASE)
+        if mixture_match:
+            parts = [part.strip() for part in mixture_match.group(1).split(",") if part.strip()]
+            for part in parts:
+                part_match = re.match(
+                    r"^(\d+)\s+parts?\s+Substance\s+([A-D])$",
+                    part,
+                    flags=re.IGNORECASE,
+                )
+                if part_match:
+                    count = int(part_match.group(1))
+                    chemical = part_match.group(2).upper()
+                    chemical_dict[chemical] = chemical_dict.get(chemical, 0) + count
+
     is_key_in_jar = False
     for obj in inventory + accessible:
         if any(obj.get("name") == key for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]):
@@ -145,29 +176,12 @@ def extract_detailed_status(ui: Dict):
                 break
 
     inv_objects = {obj.get("name") for obj in inventory or []}
-    has_key = any(key in inv_objects for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST])
-    has_jar = JAR in inv_objects
+    has_key = any(obj_name and any(obj_name == key or obj_name.startswith(key) for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]) for obj_name in inv_objects)
+    has_jar = any(obj_name == JAR or (isinstance(obj_name, str) and obj_name.startswith("jar")) for obj_name in inv_objects)
     
     chemical_dict = {"A": 0, "B": 0, "C": 0, "D": 0}
-    for s in ["A", "B", "C", "D"]:
-        if f"Substance {s}" in inv_objects:
-            chemical_dict[s] = 1
-    
     for name in inv_objects:
-        if name.startswith("mixture"):
-            # Parse mixture names like "mixture (1 parts Substance A, 1 parts Substance B)"
-            m = re.search(r"mixture\s*\((.*)\)", name, flags=re.IGNORECASE)
-            if m:
-                inside = m.group(1)
-                parts = [p.strip() for p in inside.split(",") if p.strip()]
-                for part in parts:
-                    m2 = re.match(r"(\d+)\s+parts?\s+(.+)$", part)
-                    if m2:
-                        count = int(m2.group(1))
-                        subname = m2.group(2).strip()
-                        # Merge into substances dict (values are ints)
-                        chem = subname.split()[-1]  # Get last word, e.g. "A" from "Substance A"
-                        chemical_dict[chem] = chemical_dict.get(chem, 0) + count
+        _add_chemical_counts_from_name(name or "", chemical_dict)
 
     return has_key, has_jar, is_key_in_jar, chemical_dict
 
