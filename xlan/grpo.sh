@@ -98,7 +98,7 @@ python3 -m verl.trainer.main_ppo \
     env.rollout.n=$group_size \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
-    +env.discoveryworld.chemical_N=3 \
+    +env.discoveryworld.max_chemical_n=3 \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \

@@ -33,11 +33,11 @@ model_path="sft/models/SFT-${model_name}-merged"
 experiment_name="GiGPO-${model_name}-0528"
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Challenge}"
-MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-4}"
+
+# Curriculum configuration
+MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-1}"
 CURRICULUM_ENABLED="${CURRICULUM_ENABLED:-True}"
-CURRICULUM_STAGE="${CURRICULUM_STAGE:-1}"
-CURRICULUM_MAX_STAGE="${CURRICULUM_MAX_STAGE:-$MAX_CHEMICAL_N}"
-CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.7}"
+CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.8}"
 CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
 CURRICULUM_SEED="${CURRICULUM_SEED:-0}"
 
@@ -114,11 +114,8 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.save_frames=False \
-    +env.discoveryworld.chemical_N=${MAX_CHEMICAL_N} \
-    +env.discoveryworld.max_chemical_N=${MAX_CHEMICAL_N} \
+    +env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N} \
     +env.discoveryworld.curriculum_enabled=${CURRICULUM_ENABLED} \
-    +env.discoveryworld.curriculum_stage=${CURRICULUM_STAGE} \
-    +env.discoveryworld.curriculum_max_stage=${CURRICULUM_MAX_STAGE} \
     +env.discoveryworld.curriculum_train_fraction=${CURRICULUM_TRAIN_FRACTION} \
     +env.discoveryworld.curriculum_mix_ratios="${CURRICULUM_MIX_RATIOS}" \
     +env.discoveryworld.curriculum_seed=${CURRICULUM_SEED} \
@@ -135,6 +132,13 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=20 \
     trainer.resume_mode=auto \
     trainer.val_before_train=True "$@"
+
+
+MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-2}"
+CURRICULUM_ENABLED="${CURRICULUM_ENABLED:-True}"
+CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.8}"
+CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
+CURRICULUM_SEED="${CURRICULUM_SEED:-0}"
 
 
 python3 -m verl.trainer.main_ppo \
@@ -188,11 +192,8 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.save_frames=False \
-    +env.discoveryworld.chemical_N=${MAX_CHEMICAL_N} \
-    +env.discoveryworld.max_chemical_N=${MAX_CHEMICAL_N} \
+    +env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N} \
     +env.discoveryworld.curriculum_enabled=${CURRICULUM_ENABLED} \
-    +env.discoveryworld.curriculum_stage=${CURRICULUM_STAGE} \
-    +env.discoveryworld.curriculum_max_stage=${CURRICULUM_MAX_STAGE} \
     +env.discoveryworld.curriculum_train_fraction=${CURRICULUM_TRAIN_FRACTION} \
     +env.discoveryworld.curriculum_mix_ratios="${CURRICULUM_MIX_RATIOS}" \
     +env.discoveryworld.curriculum_seed=${CURRICULUM_SEED} \

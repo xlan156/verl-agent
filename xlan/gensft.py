@@ -21,7 +21,7 @@ def build_prompt(
     step_count: int,
     max_steps: int,
     recent_actions: List[str],
-    chemical_N: int,
+    max_chemical_n: int,
 ) -> str:
     ui = (info.get("raw_observation") or {}).get("ui", {})
     state_obs = compress_ui_observation(ui)
@@ -30,14 +30,14 @@ def build_prompt(
     if recent_actions:
         memory_actions = "\n".join(recent_actions)
         return DISCOVERYWORLD_TEMPLATE.format(
-            chemical_N=chemical_N,
+            max_chemical_n=max_chemical_n,
             state_obs=state_obs,
             step_info=step_info,
             memory_actions=memory_actions,
         )
 
     return DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-        chemical_N=chemical_N,
+        max_chemical_n=max_chemical_n,
         state_obs=state_obs,
         step_info=step_info,
     )
@@ -69,7 +69,7 @@ def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]
                 info,
                 env._steps,
                 env._max_steps,
-                chemical_N=env._chemical_N,
+                max_chemical_n=env._max_chemical_n,
                 recent_actions=[str(action) for action in env.action_history[-3:]],
             )
             records.append(
@@ -111,7 +111,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2, help="Env seed.")
     parser.add_argument("--max-steps", type=int, default=50, help="Max environment steps per episode.")
     parser.add_argument("--is-train", action="store_true", help="Generate training data (default: validation data).")
-    parser.add_argument("--chemical-n", type=int, default=2, help="Total chemical amount.")
+    parser.add_argument("--max-chemical-n", type=int, default=2, help="Total chemical amount.")
     return parser.parse_args()
 
 
@@ -124,8 +124,8 @@ def main() -> None:
         val_size=30,
         num_chemicals=4,
         min_chemicals=1,
-        min_amount=args.chemical_n,
-        max_amount=args.chemical_n,
+        min_amount=args.max_chemical_n,
+        max_amount=args.max_chemical_n,
     )
     train_seeds = seed_split.get("train", [])
     val_seeds = seed_split.get("val", [])
@@ -144,7 +144,7 @@ def main() -> None:
             episode_records = rollout_episode(
                 seed=episode_seed,
                 max_steps=args.max_steps,
-                chemical_N=args.chemical_n,
+                max_chemical_n=args.max_chemical_n,
             )
             for record in episode_records:
                 len_all_records += 1

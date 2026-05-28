@@ -21,7 +21,7 @@ You are an expert agent in a room with a rusted key and a locked door.
 You need to 
 1. Find the key, pick it up and put it in the jar.
 2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {chemical_N}.
+3. Total amount of chemicals in the jar must reach {max_chemical_n}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
 5. Curriculum start state: {curriculum_state}.
 6. When the chemical combination matches, the key will be derusted. Open the door and exit.
@@ -57,7 +57,7 @@ You are an expert agent in a room with a rusted key and a locked door.
 You need to 
 1. Find the key, pick it up and put it in the jar.
 2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {chemical_N}.
+3. Total amount of chemicals in the jar must reach {max_chemical_n}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
 5. Curriculum start state: {curriculum_state}.
 6. When the chemical combination matches, the key will be derusted. Open the door and exit.

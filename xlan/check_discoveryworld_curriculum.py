@@ -12,6 +12,7 @@ from agent_system.environments.env_package.discovery.curriculum import (
     build_stage_pools,
     plan_stratified_batch,
 )
+from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldWorker
 from agent_system.environments.env_package.discovery.seed import assign_split_seeds
 
@@ -83,8 +84,7 @@ def _run_split_probe(
         "max_steps": 40,
         "train_size": batch_size,
         "val_size": batch_size,
-        "chemical_N": max_chemical_n,
-        "max_chemical_N": max_chemical_n,
+        "max_chemical_n": max_chemical_n,
         "curriculum_enabled": True,
         "curriculum_train_fraction": 0.7,
         "curriculum_mix_ratios": (0.7, 0.2, 0.1),
@@ -126,6 +126,7 @@ def _run_split_probe(
             # Instead of stage-level pools, derive from solution substates
             from agent_system.environments.env_package.discovery.curriculum import build_solution_curriculum_pools, enumerate_substates
 
+            # sol_states contains substates of the specific solution state, grouped by train/val split and sorted by total chemical count
             sol_states = build_solution_curriculum_pools(solution_state=sol, num_chemicals=4, train_fraction=env_kwargs.get("curriculum_train_fraction", 0.7), seed=env_kwargs.get("curriculum_seed", 0), include_empty=True)
             split_pool = sol_states.get(split, [])
             total_groups = {}
@@ -207,7 +208,7 @@ def _run_split_probe(
         for idx, worker in enumerate(workers):
             obs, info = worker.reset()
             debug_after_reset = worker.debug_state()
-            goal_state = tuple(info.get("chemical_solution_state") or debug_after_reset.get("chemical_solution_state") or ())
+            goal_state = tuple(info.get("chemical_solution_state") or debug_after_reset.get("chemical_solution_state"))
             init_state = tuple(info.get("curriculum_state") or ())
             goal_dict = state_to_dict(goal_state)
             init_dict = state_to_dict(init_state)
@@ -218,18 +219,8 @@ def _run_split_probe(
             print(f"[{label}] worker={idx}")
             print(f"  seed={debug_after_reset['seed']}")
             print(f"  goal_state={goal_state}")
-            print(f"  goal_dict={goal_dict}")
             print(f"  init_state={init_state}")
-            print(f"  init_state_text={info.get('curriculum_state_text')}")
-            print(f"  init_chemical_dict={ui_chemical_dict}")
-            print(f"  prepared_chemical_dict={init_dict}")
             print(f"  init_bucket={bucket}")
-            print(f"  goal_state_text={info.get('chemical_solution_state_text')}")
-            print(f"  goal_chemical_dict={state_to_dict(goal_state)}")
-            print(f"  debug_curriculum_state={debug_after_reset.get('curriculum_state')}")
-            print(f"  debug_curriculum_state_text={debug_after_reset.get('curriculum_state_text')}")
-            print(f"  debug_goal_state={debug_after_reset.get('chemical_solution_state')}")
-            print(f"  debug_goal_state_text={debug_after_reset.get('chemical_solution_state_text')}")
 
             if not goal_state:
                 all_ok = False

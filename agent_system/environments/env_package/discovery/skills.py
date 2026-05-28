@@ -192,7 +192,7 @@ class CombinatorialChemistrySkill():
 
 if __name__ == "__main__":
     from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-    env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, chemical_N=2)
+    env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, max_chemical_n=2)
     _, info = env.reset()
     skill_agent = CombinatorialChemistrySkill(env)
     skill_agent.move_to_key()

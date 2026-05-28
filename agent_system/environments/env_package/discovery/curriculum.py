@@ -90,11 +90,22 @@ def split_states(
     shuffled = list(states)
     rng = random.Random(seed)
     rng.shuffle(shuffled)
+    
+    if not shuffled:
+        return {"train": [], "val": [], "all": []}
+    
     split_index = int(round(len(shuffled) * min(max(train_fraction, 0.0), 1.0)))
-    split_index = min(max(split_index, 1 if shuffled else 0), len(shuffled))
+    train_states = shuffled[:split_index]
+    val_states = shuffled[split_index:]
+    
+    if not train_states:
+        train_states = [shuffled[0]]
+    if not val_states:
+        val_states = [shuffled[-1]]
+
     return {
-        "train": shuffled[:split_index],
-        "val": shuffled[split_index:],
+        "train": train_states,
+        "val": val_states,
         "all": shuffled,
     }
 
@@ -208,6 +219,9 @@ def sample_solution_curriculum_state(
     )
     split_states_pool = pools.get(split, [])
     if not split_states_pool:
+        split_states_pool = pools.get("all", [])
+    
+    if not split_states_pool:
         raise ValueError(f"No curriculum states available for split={split}")
 
     split_states_pool = list(split_states_pool)
@@ -281,6 +295,8 @@ def sample_mixed_curriculum_state(
     available = [(bucket, weight) for bucket, weight in zip(buckets, weights) if bucket and weight > 0]
     if not available:
         fallback = current_pool or previous_pool or earlier_pool
+        if not fallback:
+            fallback = list(stage_pools.get(stage, {}).get("all", []))
         if not fallback:
             raise ValueError(f"No curriculum states available for stage={stage}, split={split}")
         return rng.choice(fallback)
