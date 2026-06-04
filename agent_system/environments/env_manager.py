@@ -25,7 +25,6 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from agent_system.environments.prompts import *
-from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
 from agent_system.memory import SimpleMemory, SearchMemory
 
@@ -57,6 +56,7 @@ def parse_gamefile(infos):
         else:
             gamefile.append(None)
     return gamefile
+
 
 def set_gamefile(infos, gamefile):
     for i in range(len(infos)):
@@ -632,7 +632,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        from agent_system.environments.env_package.discovery.helpers import all_action_abbr
+        from agent_system.environments.env_package.discovery.utils import all_action_abbr
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
@@ -660,7 +660,12 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         actions, valids = self.projection_f(text_actions, self.last_infos)
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
-        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        self.memory.store({
+            "text_obs": self.pre_text_obs,
+            "action": actions,
+            "rust_level": [info.get("key_rust_level") for info in infos],
+            "rust_status": [info.get("key_rust_status") for info in infos],
+        })
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
@@ -677,18 +682,12 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         return next_observations, rewards, dones, infos
 
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
+        from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
+        from agent_system.environments.env_package.discovery.utils import format_rust_update
+        
         postprocess_text_obs: List[str] = []
         discovery_cfg = getattr(self.config.env, "discoveryworld", None)
         max_chemical_n = getattr(discovery_cfg, "max_chemical_n", getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)))
-
-        if not init and self.config.env.history_length > 0:
-            memory_contexts, valid_lens = self.memory.fetch(
-                self.config.env.history_length,
-                obs_key="text_obs",
-                action_key="action",
-            )
-        else:
-            memory_contexts, valid_lens = None, None
 
         for i in range(len(text_obs)):
             state_obs = text_obs[i]
@@ -696,7 +695,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
             curriculum_state = infos[i].get("curriculum_state")
             curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
-            if init or self.config.env.history_length <= 0 or memory_contexts is None:
+            if init or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     max_chemical_n=max_chemical_n,
                     curriculum_state=curriculum_state_text,
@@ -704,9 +703,25 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                     step_info=step_info,
                 )
             else:
-                # Keep only the last 2 mapped action skills.
-                recent_actions = [record.get("action") for record in self.memory[i][-3:]]
-                memory_actions = "\n".join(a for a in recent_actions if a)
+                recent_records = self.memory[i][-self.config.env.history_length:]
+                history_start_index = len(self.memory[i]) - len(recent_records)
+
+                if history_start_index > 0 and len(self.memory[i]) > len(recent_records):
+                    previous_rust_level = self.memory[i][history_start_index - 1].get("rust_level")
+                else:
+                    previous_rust_level = None
+
+                memory_lines = []
+                for step_offset, record in enumerate(recent_records):
+                    action = record.get("action")
+                    rust_level = record.get("rust_level")
+                    if not action:
+                        continue
+                    rust_update = format_rust_update(previous_rust_level, rust_level)
+                    memory_lines.append(f"{step_offset + 1}. {action} -> {rust_update}")
+                    previous_rust_level = rust_level
+
+                memory_actions = "\n".join(memory_lines)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     max_chemical_n=max_chemical_n,
                     curriculum_state=curriculum_state_text,

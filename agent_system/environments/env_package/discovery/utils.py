@@ -1,5 +1,7 @@
 from typing import Dict, Any, List, Tuple, Optional
 import re
+import os
+import time
 
 all_plausible_action_json = [
     {"action": "PICKUP", "arg1": "33120"},
@@ -132,11 +134,69 @@ SKILL_NAMES = {
     OPEN_DOOR
 }
 
+
+def slugify(value: Optional[str]) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-") or "unknown"
+
+
+def build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> str:
+    scenario = slugify(env_kwargs.get("scenario_name"))
+    difficulty = slugify(env_kwargs.get("difficulty"))
+    model_name = env_kwargs.get("model_name") or os.environ.get("MODEL_NAME")
+    job_id = slugify(os.environ.get("SLURM_JOB_ID"))
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    split = "train" if is_train else "eval"
+    return os.path.join(
+        "outputs",
+        "discoveryworld_frames",
+        f"{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
+    )
+
+
+def format_rust_level(rust_level: Optional[int]) -> str:
+    if rust_level is None:
+        return "unknown"
+
+    labels = {
+        0: "no rust",
+        1: "lightly rusted",
+        2: "moderately rusted",
+        3: "heavily rusted",
+    }
+    return labels.get(int(rust_level), "unknown")
+
+
+def format_rust_update(previous_level: Any, current_level: Any) -> str:
+    current_label = format_rust_level(current_level)
+    if current_label == "unknown":
+        return "Rust level update: unknown"
+
+    if previous_level is None:
+        return f"Rust level update: {current_label}"
+
+    try:
+        previous_value = int(previous_level)
+        current_value = int(current_level)
+    except (TypeError, ValueError):
+        return f"Rust level update: {current_label}"
+
+    if current_value < previous_value:
+        change = "improved"
+    elif current_value > previous_value:
+        change = "worsened"
+    else:
+        change = "no change"
+
+    return f"Rust level update: {current_label} ({change})"
+
+
 def extract_detailed_status(ui: Dict):
     inventory = ui.get("inventoryObjects", [])
     accessible = ui.get("accessibleEnvironmentObjects", [])
 
-    def _add_chemical_counts_from_name(name: str, chemical_dict: Dict[str, int]) -> None:
+    def add_chemical_counts_from_name(name: str, chemical_dict: Dict[str, int]) -> None:
         if not name:
             return
 
@@ -181,7 +241,7 @@ def extract_detailed_status(ui: Dict):
     
     chemical_dict = {"A": 0, "B": 0, "C": 0, "D": 0}
     for name in inv_objects:
-        _add_chemical_counts_from_name(name or "", chemical_dict)
+        add_chemical_counts_from_name(name or "", chemical_dict)
 
     return has_key, has_jar, is_key_in_jar, chemical_dict
 
@@ -240,12 +300,12 @@ def compress_ui_observation(ui_obs: dict) -> str:
                 lines.append(f"- {direction} ({distance} tile(s) away): {desc}")
     
     # 5. Action message
-    last_msg = ui_obs.get("lastActionMessage", "")
-    extended_msg = ui_obs.get("extended_action_message", "")
-    if last_msg:
-        lines.append(f"\nLast action message: {last_msg}")
-    if extended_msg:
-        lines.append(f"Extended info: {extended_msg}")
+    #last_msg = ui_obs.get("lastActionMessage", "")
+    #extended_msg = ui_obs.get("extended_action_message", "")
+    #if last_msg:
+    #    lines.append(f"\nLast action message: {last_msg}")
+    #if extended_msg:
+    #    lines.append(f"Extended info: {extended_msg}")
     
     # 6. Task completion
     task_progress = ui_obs.get("taskProgress", [])[0] if ui_obs.get("taskProgress") else {}

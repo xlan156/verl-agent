@@ -1,58 +1,19 @@
-"""
-Comprehensive refactoring of DiscoveryWorldEnv to:
-1. Remove prev_* injections, use two-info snapshot model instead
-2. Remove redundant variables (action_counter, object_seen, teacher_prob, etc.)
-3. Simplify info-related functions
-"""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import os
-import re
-import time
-from collections import defaultdict
 import ray
 from copy import deepcopy
-import torch
-import math
 import numpy as np
 
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
 )
-from agent_system.environments.env_package.discovery.curriculum import (
-    build_stage_pools,
-    build_solution_curriculum_pools,
-    format_chemical_state,
-    plan_curriculum_batch,
-    normalize_chemical_state,
-    sample_solution_curriculum_state,
-    solution_dict_to_state,
-)
+from agent_system.environments.env_package.discovery.curriculum import *
+from agent_system.environments.env_package.discovery.seed import build_fixed_seed_pools_by_amount
 from agent_system.environments.env_package.discovery.rule_based_agent import *
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
-from agent_system.environments.env_package.discovery.seed import assign_split_seeds
-
-
-def _slugify(value: Optional[str]) -> str:
-    text = (value or "").strip().lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    return text.strip("-") or "unknown"
-
-
-def _build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> str:
-    scenario = _slugify(env_kwargs.get("scenario_name"))
-    difficulty = _slugify(env_kwargs.get("difficulty"))
-    model_name = env_kwargs.get("model_name") or os.environ.get("MODEL_NAME")
-    job_id = _slugify(os.environ.get("SLURM_JOB_ID"))
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    split = "train" if is_train else "eval"
-    return os.path.join(
-        "outputs",
-        "discoveryworld_frames",
-        f"{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
-    )
 
 
 class DiscoveryWorldEnv:
@@ -178,6 +139,20 @@ class DiscoveryWorldEnv:
         info["won"] = bool(self._api.areTasksComplete())
         # include env-level non-UI state
         info["used_dispensers"] = dict(self.used_dispensers)
+
+        world = getattr(self._api, "world", None)
+        task_scorer = getattr(world, "taskScorer", None) if world is not None else None
+        scoring_info = getattr(task_scorer, "scoringInfo", None) or {}
+        key = scoring_info.get("key")
+        if key is not None:
+            rust_level = key.attributes.get("rustLevel")
+            info["key_rust_level"] = int(rust_level) if rust_level is not None else None
+            info["key_rust_status"] = _format_rust_level(info["key_rust_level"])
+            info["key_is_rusted"] = bool(key.attributes.get("isRusted", False))
+        else:
+            info["key_rust_level"] = None
+            info["key_rust_status"] = "unknown"
+            info["key_is_rusted"] = None
 
         return text_obs, info
 
@@ -534,6 +509,13 @@ class DiscoveryWorldVectorEnv:
         self._curriculum_mix_ratios = tuple(env_kwargs.get("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
         self._curriculum_seed = int(env_kwargs.get("curriculum_seed", seed))
         self._curriculum_split = "train" if is_train else "val"
+        self._curriculum_seed_pools = build_fixed_seed_pools_by_amount(
+            base_seed=self._curriculum_seed,
+            max_amount=self._curriculum_stage,
+            num_chemicals=4,
+            min_chemicals=1,
+            train_fraction=self._curriculum_train_fraction,
+        ) if self._curriculum_enabled else None
         self._curriculum_stage_pools = build_stage_pools(
             max_chemical_n=self._curriculum_stage,
             num_chemicals=4,
@@ -565,20 +547,13 @@ class DiscoveryWorldVectorEnv:
         env_kwargs["is_train"] = self.is_train
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
-        configured_train_size = int(env_kwargs.get("train_size", self.env_num))
-        configured_val_size = int(env_kwargs.get("val_size", self.env_num))
         configured_chemical_n = int(env_kwargs.get("max_chemical_n", env_kwargs.get("max_chemical_N", 2)))
-        split_seeds = assign_split_seeds(
-            base_seed=seed,
-            train_size=configured_train_size,
-            val_size=configured_val_size,
-            num_chemicals=4,
-            min_chemicals=1,
-            min_amount=configured_chemical_n,
-            max_amount=configured_chemical_n,
-        )
         selected_split = "train" if self.is_train else "val"
-        split_seed_list = split_seeds[selected_split]
+        split_seed_list: List[int] = []
+        if self._curriculum_seed_pools is not None:
+            split_seed_list = list(
+                self._curriculum_seed_pools.get(configured_chemical_n, {}).get(selected_split, []),
+            )
         if not split_seed_list:
             split_seed_list = [int(seed)]
 

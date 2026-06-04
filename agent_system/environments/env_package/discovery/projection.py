@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 from difflib import SequenceMatcher
-from agent_system.environments.env_package.discovery.helpers import *
+from agent_system.environments.env_package.discovery.utils import *
 
 
 def similar_string(str1: str, str2: str) -> bool:

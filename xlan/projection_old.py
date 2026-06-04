@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import DiscoveryWorldAPI
-from agent_system.environments.env_package.discovery.helpers import all_plausible_action_mapper
+from agent_system.environments.env_package.discovery.utils import all_plausible_action_mapper
 
 AVAILABLE_ACTIONS = DiscoveryWorldAPI.listKnownActionsStatic()
 

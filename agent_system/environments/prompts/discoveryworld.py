@@ -23,8 +23,7 @@ You need to
 2. Take the jar to the dispensers to derust the key.
 3. Total amount of chemicals in the jar must reach {max_chemical_n}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. Curriculum start state: {curriculum_state}.
-6. When the chemical combination matches, the key will be derusted. Open the door and exit.
+5. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}
@@ -59,15 +58,14 @@ You need to
 2. Take the jar to the dispensers to derust the key.
 3. Total amount of chemicals in the jar must reach {max_chemical_n}.
 4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. Curriculum start state: {curriculum_state}.
-6. When the chemical combination matches, the key will be derusted. Open the door and exit.
+5. When the chemical combination matches, the key will be derusted. Open the door and exit.
 
 [STATE]
 {step_info}
 {state_obs}
 
 [MEMORY]
-You have taken the following actions in the 3 past steps:
+You have taken the following actions in the 3 past steps, along with the key's rust level after each step:
 {memory_actions}
 Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 

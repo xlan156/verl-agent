@@ -6,7 +6,7 @@ from agent_system.environments.env_package.discovery.curriculum import (
     CHEMICAL_ORDER,
     normalize_chemical_state,
 )
-from agent_system.environments.env_package.discovery.helpers import *
+from agent_system.environments.env_package.discovery.utils import *
 
 class CombinatorialChemistrySkill():
     def __init__(self, env):

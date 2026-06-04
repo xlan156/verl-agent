@@ -82,6 +82,38 @@ def enumerate_substates(
     return states
 
 
+def _l1_distance(lhs: Sequence[int], rhs: Sequence[int]) -> int:
+    return sum(abs(int(left) - int(right)) for left, right in zip(lhs, rhs))
+
+
+def enumerate_nearby_init_states(
+    target_state: Any,
+    num_chemicals: int = 4,
+    include_empty: bool = False,
+    include_same_total_neighbors: bool = True,
+) -> List[Tuple[int, ...]]:
+    """Enumerate init-state candidates near a target chemical state.
+
+    The pool contains strict substates and, optionally, same-total one-transfer
+    neighbors such as (0, 1, 1, 0) for target (1, 1, 0, 0).
+    """
+    target = normalize_chemical_state(target_state, num_chemicals=num_chemicals)
+    states = set(enumerate_substates(target, num_chemicals=num_chemicals, include_target=False, include_empty=include_empty))
+
+    if include_same_total_neighbors:
+        target_total = sum(target)
+        for candidate in enumerate_compositions(target_total, num_chemicals=num_chemicals):
+            if candidate == target:
+                continue
+            if not include_empty and all(value == 0 for value in candidate):
+                continue
+            if _l1_distance(candidate, target) == 2:
+                states.add(tuple(int(value) for value in candidate))
+
+    nearby_states = sorted(states, key=lambda candidate: (sum(candidate), candidate))
+    return nearby_states
+
+
 def split_states(
     states: Sequence[Tuple[int, ...]],
     train_fraction: float = 0.7,
@@ -185,13 +217,14 @@ def build_solution_curriculum_pools(
     train_fraction: float = 0.7,
     seed: int = 0,
     include_empty: bool = True,
+    include_same_total_neighbors: bool = True,
 ) -> Dict[str, List[Tuple[int, ...]]]:
-    """Build a disjoint train/val pool of strict substates for one chemical solution."""
-    states = enumerate_substates(
+    """Build a disjoint train/val pool of nearby init states for one solution."""
+    states = enumerate_nearby_init_states(
         solution_state,
         num_chemicals=num_chemicals,
-        include_target=False,
         include_empty=include_empty,
+        include_same_total_neighbors=include_same_total_neighbors,
     )
     return split_states(states, train_fraction=train_fraction, seed=seed)
 
@@ -204,11 +237,13 @@ def sample_solution_curriculum_state(
     num_chemicals: int = 4,
     mix_ratios: Sequence[float] = (0.7, 0.2, 0.1),
     include_empty: bool = True,
+    include_same_total_neighbors: bool = True,
 ) -> Tuple[int, ...]:
-    """Sample a strict substate of the given solution.
+    """Sample a nearby init state of the given solution.
 
     The pool is first split into train/val without overlap, then mixed by
     current / previous / earlier difficulty bands based on total chemical count.
+    The current bucket includes same-total one-transfer neighbors when enabled.
     """
     pools = build_solution_curriculum_pools(
         solution_state=solution_state,
@@ -216,6 +251,7 @@ def sample_solution_curriculum_state(
         train_fraction=train_fraction,
         seed=seed,
         include_empty=include_empty,
+        include_same_total_neighbors=include_same_total_neighbors,
     )
     split_states_pool = pools.get(split, [])
     if not split_states_pool:
