@@ -100,6 +100,20 @@ DOOR = "door"
 TABLE = "table"
 OTHER_OBJECTS = ["wall", "floor", "path", "grass", "table"]
 
+KEY_NAME_TO_RUST_LABEL = {
+    RUSTED_KEY: "heavily rusted",
+    RUSTED_KEY_2: "moderately rusted",
+    RUSTED_KEY_3: "lightly rusted",
+    KEY_NO_RUST: "no rust",
+}
+
+RUST_LABEL_TO_LEVEL = {
+    "no rust": 0,
+    "lightly rusted": 1,
+    "moderately rusted": 2,
+    "heavily rusted": 3,
+}
+
 MOVE_TO_KEY = "move_to_key"
 MOVE_TO_JAR = "move_to_jar"
 PICK_UP_KEY = "pick_up_key"
@@ -155,8 +169,41 @@ def build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> s
     )
 
 
-def format_rust_level(rust_level: Optional[int]) -> str:
+def key_name_to_rust_level_label(key_name: Optional[str]) -> Optional[str]:
+    if not isinstance(key_name, str):
+        return None
+
+    normalized = key_name.strip()
+    if not normalized:
+        return None
+
+    if normalized in KEY_NAME_TO_RUST_LABEL:
+        return KEY_NAME_TO_RUST_LABEL[normalized]
+
+    for known_name, rust_label in KEY_NAME_TO_RUST_LABEL.items():
+        if normalized.startswith(known_name):
+            return rust_label
+
+    return None
+
+
+def format_rust_level(rust_level: Any) -> str:
     if rust_level is None:
+        return "unknown"
+
+    if isinstance(rust_level, str):
+        # Accept either full key names (e.g. "rusted key (heavily rusted)")
+        # or direct labels (e.g. "heavily rusted").
+        from_key_name = key_name_to_rust_level_label(rust_level)
+        if from_key_name is not None:
+            return from_key_name
+
+        normalized = rust_level.strip().lower()
+        return normalized if normalized in RUST_LABEL_TO_LEVEL else "unknown"
+
+    try:
+        level_value = int(rust_level)
+    except (TypeError, ValueError):
         return "unknown"
 
     labels = {
@@ -165,7 +212,7 @@ def format_rust_level(rust_level: Optional[int]) -> str:
         2: "moderately rusted",
         3: "heavily rusted",
     }
-    return labels.get(int(rust_level), "unknown")
+    return labels.get(level_value, "unknown")
 
 
 def format_rust_update(previous_level: Any, current_level: Any) -> str:
@@ -176,10 +223,13 @@ def format_rust_update(previous_level: Any, current_level: Any) -> str:
     if previous_level is None:
         return f"Rust level update: {current_label}"
 
-    try:
-        previous_value = int(previous_level)
-        current_value = int(current_level)
-    except (TypeError, ValueError):
+    previous_label = format_rust_level(previous_level)
+    if previous_label == "unknown":
+        return f"Rust level update: {current_label}"
+
+    previous_value = RUST_LABEL_TO_LEVEL.get(previous_label)
+    current_value = RUST_LABEL_TO_LEVEL.get(current_label)
+    if previous_value is None or current_value is None:
         return f"Rust level update: {current_label}"
 
     if current_value < previous_value:
@@ -229,21 +279,27 @@ def extract_detailed_status(ui: Dict):
 
     is_key_in_jar = False
     for obj in inventory + accessible:
-        if any(obj.get("name") == key for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]):
+        if key_name_to_rust_level_label(obj.get("name")) is not None:
             description = obj.get("description", "")
             if "in jar" in description:
                 is_key_in_jar = True
                 break
 
     inv_objects = {obj.get("name") for obj in inventory or []}
-    has_key = any(obj_name and any(obj_name == key or obj_name.startswith(key) for key in [RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3, KEY_NO_RUST]) for obj_name in inv_objects)
+    has_key = any(key_name_to_rust_level_label(obj_name) is not None for obj_name in inv_objects)
     has_jar = any(obj_name == JAR or (isinstance(obj_name, str) and obj_name.startswith("jar")) for obj_name in inv_objects)
+
+    key_rust_level = None
+    for obj in inventory or []:
+        key_rust_level = key_name_to_rust_level_label(obj.get("name"))
+        if key_rust_level is not None:
+            break
     
     chemical_dict = {"A": 0, "B": 0, "C": 0, "D": 0}
     for name in inv_objects:
         add_chemical_counts_from_name(name or "", chemical_dict)
 
-    return has_key, has_jar, is_key_in_jar, chemical_dict
+    return has_key, has_jar, is_key_in_jar, chemical_dict, key_rust_level
 
 
 def compress_ui_observation(ui_obs: dict) -> str:

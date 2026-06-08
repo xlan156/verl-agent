@@ -140,20 +140,6 @@ class DiscoveryWorldEnv:
         # include env-level non-UI state
         info["used_dispensers"] = dict(self.used_dispensers)
 
-        world = getattr(self._api, "world", None)
-        task_scorer = getattr(world, "taskScorer", None) if world is not None else None
-        scoring_info = getattr(task_scorer, "scoringInfo", None) or {}
-        key = scoring_info.get("key")
-        if key is not None:
-            rust_level = key.attributes.get("rustLevel")
-            info["key_rust_level"] = int(rust_level) if rust_level is not None else None
-            info["key_rust_status"] = _format_rust_level(info["key_rust_level"])
-            info["key_is_rusted"] = bool(key.attributes.get("isRusted", False))
-        else:
-            info["key_rust_level"] = None
-            info["key_rust_status"] = "unknown"
-            info["key_is_rusted"] = None
-
         return text_obs, info
 
     def _update_location_history(self, ui: Dict[str, Any]) -> None:
@@ -166,11 +152,16 @@ class DiscoveryWorldEnv:
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_location_history(ui)
 
-        has_key, has_jar, is_key_in_jar, chemical_dict = extract_detailed_status(ui)
+        has_key, has_jar, is_key_in_jar, chemical_dict, key_rust_level = extract_detailed_status(ui)
         info["has_key"] = has_key
         info["has_jar"] = has_jar
         info["is_key_in_jar"] = is_key_in_jar
         info["chemical_dict"] = deepcopy(chemical_dict)
+        info["key_rust_level"] = key_rust_level
+        info["key_rust_status"] = format_rust_level(key_rust_level)
+        info["key_is_rusted"] = (
+            None if key_rust_level is None else key_rust_level != "no rust"
+        )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
         """Reset environment and return initial observation and info."""

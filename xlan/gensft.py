@@ -7,30 +7,49 @@ from tqdm import trange
 
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
+from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
+from agent_system.environments.env_package.discovery.utils import format_rust_update
 from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE,
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
 )
 from agent_system.environments.env_package.discovery.seed import build_fixed_seed_pools_by_amount
-from agent_system.environments.env_package.discovery.utils import compress_ui_observation
 
 
 def build_prompt(
-    info: Dict[str, Any],
+    state_obs: str,
+    curriculum_state: Any,
     step_count: int,
     max_steps: int,
-    recent_actions: List[str],
+    action_history: List[Dict[str, Any]],
     max_chemical_n: int,
 ) -> str:
-    ui = (info.get("raw_observation") or {}).get("ui", {})
-    state_obs = compress_ui_observation(ui)
     step_info = f"Step: {step_count} / {max_steps}"
+    curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
 
-    if recent_actions:
-        memory_actions = "\n".join(recent_actions)
+    recent_records = action_history[-3:]
+    if recent_records:
+        memory_start_index = len(action_history) - len(recent_records)
+        if memory_start_index > 0:
+            previous_rust_level = action_history[memory_start_index - 1].get("rust_level")
+        else:
+            previous_rust_level = None
+
+        memory_lines: List[str] = []
+        for step_offset, record in enumerate(recent_records):
+            action = record.get("action")
+            rust_level = record.get("rust_level")
+            if not action:
+                continue
+            rust_update = format_rust_update(previous_rust_level, rust_level)
+            memory_lines.append(f"{step_offset + 1}. {action} -> {rust_update}")
+            previous_rust_level = rust_level
+
+        memory_actions = "\n".join(memory_lines)
         return DISCOVERYWORLD_TEMPLATE.format(
             max_chemical_n=max_chemical_n,
+            curriculum_state=curriculum_state_text,
             state_obs=state_obs,
             step_info=step_info,
             memory_actions=memory_actions,
@@ -38,6 +57,7 @@ def build_prompt(
 
     return DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
         max_chemical_n=max_chemical_n,
+        curriculum_state=curriculum_state_text,
         state_obs=state_obs,
         step_info=step_info,
     )
@@ -55,22 +75,24 @@ def create_env(seed: int, max_steps: int, **kwargs) -> DiscoveryWorldEnv:
 
 def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]:
     env = create_env(seed=seed, max_steps=max_steps, **kwargs)
-    _, info = env.reset()
+    state_obs, info = env.reset()
     teacher = RulebasedAgentSkill(env)
     skill_agent = CombinatorialChemistrySkill(env)
 
     records: List[Dict[str, Any]] = []
+    action_history: List[Dict[str, Any]] = []
     done = False
 
     while not done:
         teacher_skill = teacher.select_skill(info)
         if teacher_skill:
             prompt = build_prompt(
-                info,
-                env._steps,
-                env._max_steps,
+                state_obs=state_obs.replace("\\n", "\n"),
+                curriculum_state=info.get("curriculum_state"),
+                step_count=env._steps,
+                max_steps=env._max_steps,
+                action_history=action_history,
                 max_chemical_n=env._max_chemical_n,
-                recent_actions=[str(action) for action in env.action_history[-3:]],
             )
             records.append(
                 {
@@ -88,18 +110,22 @@ def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]
             )
         else:
             with open("teacher_skill.txt", "a") as f:
-                ui = (info.get("raw_observation") or {}).get("ui", {})
-                compressed_obs = env.compress_ui_observation(ui)
                 f.write("======================\n")
                 f.write(f"self.is_key_in_jar: {env.is_key_in_jar}\n")
                 f.write(f"used_dispensers: {env.used_dispensers}\n")
-                f.write(f"Observation:\n{compressed_obs}\n\n")
+                f.write(f"Observation:\n{state_obs}\n\n")
 
         if random.random() < 0.5:
             random_skill = skill_agent.sample_random_skill()
         else:
             random_skill = teacher_skill
-        _, _, done, info = env.step(random_skill)
+        state_obs, _, done, info = env.step(random_skill)
+        action_history.append(
+            {
+                "action": random_skill,
+                "rust_level": info.get("key_rust_level"),
+            }
+        )
 
     env.close()
     return records

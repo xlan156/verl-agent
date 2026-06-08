@@ -39,19 +39,19 @@ class CombinatorialChemistrySkill():
 
     def _ensure_key_and_jar_ready(self):
         self.update_ui_and_location()
-        has_key, has_jar, is_key_in_jar, _ = extract_detailed_status(self.ui)
+        has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
 
         if not has_key and not is_key_in_jar:
             self.move_to_key()
             self.pick_up_key()
             self.update_ui_and_location()
-            has_key, has_jar, is_key_in_jar, _ = extract_detailed_status(self.ui)
+            has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
 
         if has_key and not has_jar:
             self.move_to_jar()
             self.pick_up_jar()
             self.update_ui_and_location()
-            has_key, has_jar, is_key_in_jar, _ = extract_detailed_status(self.ui)
+            has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
 
         if has_key and has_jar and not is_key_in_jar:
             self.put_key_in_jar()
@@ -76,7 +76,7 @@ class CombinatorialChemistrySkill():
     def update_ui_and_location(self):
         self.ui = self.env._api.getAgentObservation(agentIdx=0).get("ui")
         self.location = (self.ui.get("agentLocation").get("x"), self.ui.get("agentLocation").get("y"))
-        _, _, _, self.chemical_dict = extract_detailed_status(self.ui)
+        _, _, _, self.chemical_dict, _ = extract_detailed_status(self.ui)
 
     def sample_random_skill(self):
         return random.choice(self.skill_names)
