@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=gpu_a100
-#SBATCH --job-name=GiG
+#SBATCH --job-name=short
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18

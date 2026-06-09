@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import product
+import math
 import random
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -86,6 +87,25 @@ def _l1_distance(lhs: Sequence[int], rhs: Sequence[int]) -> int:
     return sum(abs(int(left) - int(right)) for left, right in zip(lhs, rhs))
 
 
+def _cosine_similarity(lhs: Sequence[int], rhs: Sequence[int]) -> float:
+    lhs_values = [int(value) for value in lhs]
+    rhs_values = [int(value) for value in rhs]
+    dot = sum(left * right for left, right in zip(lhs_values, rhs_values))
+    lhs_norm = math.sqrt(sum(value * value for value in lhs_values))
+    rhs_norm = math.sqrt(sum(value * value for value in rhs_values))
+    if lhs_norm == 0 or rhs_norm == 0:
+        return 0.0
+    return dot / (lhs_norm * rhs_norm)
+
+
+def _is_below_similarity_threshold(
+    candidate: Sequence[int],
+    target: Sequence[int],
+    threshold: float = 0.99,
+) -> bool:
+    return _cosine_similarity(candidate, target) < threshold
+
+
 def enumerate_nearby_init_states(
     target_state: Any,
     num_chemicals: int = 4,
@@ -110,6 +130,7 @@ def enumerate_nearby_init_states(
             if _l1_distance(candidate, target) == 2:
                 states.add(tuple(int(value) for value in candidate))
 
+    states = {state for state in states if _is_below_similarity_threshold(state, target)}
     nearby_states = sorted(states, key=lambda candidate: (sum(candidate), candidate))
     return nearby_states
 

@@ -7,6 +7,7 @@
 #SBATCH --time=4:00:00
 #SBATCH --output=job_log/GiGPO-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/GiGPO-%j/Qwen0.5B-error.txt
+#SBATCH --reservation=terv92681
 
 module load 2023
 module load CUDA/12.4.0
@@ -30,14 +31,14 @@ export RAY_ADDRESS="${head_node_ip}:${port}"
 model_name=Qwen2.5-0.5B-Instruct
 project_name="GiGPO-discoveryworld"
 model_path="sft/models/SFT-${model_name}-merged"
-experiment_name="GiGPO-${model_name}"
+experiment_name="GiGPO-${model_name}-0608"
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Challenge}"
 
-train_data_size=20
+train_data_size=32
 val_data_size=32
 num_cpus_per_env_worker=0.1
-group_size=2
+group_size=1
 num_gpus_per_node=1
 
 python3 -m sft.SFTtrain
@@ -95,7 +96,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    actor_rollout_ref.rollout.temperature=0.8 \
+    actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \

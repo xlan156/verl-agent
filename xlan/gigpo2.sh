@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=0:10:00
+#SBATCH --time=2:00:00
 #SBATCH --output=job_log/GiGPO-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/GiGPO-%j/Qwen0.5B-error.txt
 
@@ -30,14 +30,14 @@ export RAY_ADDRESS="${head_node_ip}:${port}"
 MODEL_NAME=Qwen2.5-0.5B-Instruct
 PROJECT_NAME="GiGPO-discoveryworld"
 MODEL_PATH="sft/models/SFT-${MODEL_NAME}-merged"
-EXPERIMENT_NAME="GiGPO-${MODEL_NAME}"
+EXPERIMENT_NAME="GiGPO-${MODEL_NAME}-0608"
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Challenge}"
 
-TRAIN_DATA_SIZE=40
-VAL_DATA_SIZE=16
+TRAIN_DATA_SIZE=32
+VAL_DATA_SIZE=32
 num_cpus_per_env_worker=0.1
-GROUP_SIZE=4
+GROUP_SIZE=2
 num_gpus_per_node=1
 
 #python3 -m sft.SFTtrain
@@ -57,13 +57,13 @@ python3 -m examples.data_preprocess.prepare \
     --val_data_size $VAL_DATA_SIZE
 
 # Common configs
-LEARNING_RATE=1e-8
+LEARNING_RATE=5e-8
 KL_LOSS_COEF=0.15
-EPOCHS=35
+EPOCHS=40
 
 # Curriculum configuration
 MAX_CHEMICAL_N=2
-MAX_STEP=15
+MAX_STEP=20
 CURRICULUM_ENABLED="${CURRICULUM_ENABLED:-True}"
 CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.8}"
 CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
@@ -96,7 +96,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    actor_rollout_ref.rollout.temperature=0.8 \
+    actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
