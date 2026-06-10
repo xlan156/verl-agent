@@ -41,7 +41,7 @@ num_cpus_per_env_worker=0.1
 group_size=1
 num_gpus_per_node=1
 
-python3 -m sft.SFTtrain
+#python3 -m sft.SFTtrain
 
 ray start --head \
     --port=$port \

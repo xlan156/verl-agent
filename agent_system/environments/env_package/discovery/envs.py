@@ -192,13 +192,12 @@ class DiscoveryWorldEnv:
             self._last_action_result = None
         elif self._curriculum_enabled and self._chemical_solution_state is not None:
             self._chemical_solution_state = self._get_chemical_solution_state()
-            self._curriculum_state = sample_solution_curriculum_state(
+            self._curriculum_state = sample_solution_init_state(
                 solution_state=self._chemical_solution_state,
                 split="train" if self._is_train else "val",
                 train_fraction=self._curriculum_train_fraction,
-                seed=self._curriculum_seed,
+                seed=self._curriculum_seed + self._thread_id,
                 num_chemicals=4,
-                mix_ratios=self._curriculum_mix_ratios,
             )
             saved_used_dispensers = dict(self.used_dispensers)
             self._skill_runner.prepare_chemical_state(self._curriculum_state)
@@ -495,7 +494,7 @@ class DiscoveryWorldVectorEnv:
         self._curriculum_enabled = bool(env_kwargs.get("curriculum_enabled", False))
         # Use a single curriculum stage value derived from explicit curriculum_stage
         # or fall back to max_chemical_n (canonical external config key).
-        self._curriculum_stage = int(env_kwargs.get("max_chemical_n", 2))
+        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", env_kwargs.get("max_chemical_n", 2)))
         self._curriculum_train_fraction = float(env_kwargs.get("curriculum_train_fraction", 0.7))
         self._curriculum_mix_ratios = tuple(env_kwargs.get("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
         self._curriculum_seed = int(env_kwargs.get("curriculum_seed", seed))
@@ -538,22 +537,40 @@ class DiscoveryWorldVectorEnv:
         env_kwargs["is_train"] = self.is_train
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
-        configured_chemical_n = int(env_kwargs.get("max_chemical_n", env_kwargs.get("max_chemical_N", 2)))
         selected_split = "train" if self.is_train else "val"
-        split_seed_list: List[int] = []
-        if self._curriculum_seed_pools is not None:
-            split_seed_list = list(
-                self._curriculum_seed_pools.get(configured_chemical_n, {}).get(selected_split, []),
-            )
-        if not split_seed_list:
-            split_seed_list = [int(seed)]
+        if self._curriculum_enabled:
+            if self.is_train:
+                base_goal_stage_plan = plan_curriculum_goal_stages(
+                    stage=self._curriculum_stage,
+                    batch_size=self.env_num,
+                    mix_ratios=self._curriculum_mix_ratios,
+                    seed=self._curriculum_seed,
+                )
+            else:
+                base_goal_stage_plan = [self._curriculum_stage] * self.env_num
+            goal_stage_plan = [stage for stage in base_goal_stage_plan for _ in range(self.group_n)]
+        else:
+            configured_chemical_n = int(env_kwargs.get("max_chemical_n", env_kwargs.get("max_chemical_N", 2)))
+            goal_stage_plan = [configured_chemical_n] * self.num_processes
 
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)
         for i in range(self.num_processes):
+            goal_stage = int(goal_stage_plan[i])
+            split_seed_list: List[int] = []
+            if self._curriculum_seed_pools is not None:
+                split_seed_list = list(
+                    self._curriculum_seed_pools.get(goal_stage, {}).get(selected_split, []),
+                )
+            if not split_seed_list:
+                split_seed_list = [int(seed)]
+
             # Share seed across group_n replicas while keeping train/val seed ranges isolated.
             seed_idx = (i // self.group_n) % len(split_seed_list)
             worker_seed = int(split_seed_list[seed_idx])
-            worker = env_worker.remote(seed=worker_seed, env_kwargs=env_kwargs, thread_id=i)
+            worker_env_kwargs = dict(env_kwargs)
+            worker_env_kwargs["max_chemical_n"] = goal_stage
+            worker_env_kwargs["curriculum_goal_stage"] = goal_stage
+            worker = env_worker.remote(seed=worker_seed, env_kwargs=worker_env_kwargs, thread_id=i)
             self._workers.append(worker)
 
 
@@ -564,32 +581,16 @@ class DiscoveryWorldVectorEnv:
         obs_list: List[str] = []
         info_list: List[Dict[str, Any]] = []
 
-        # Build per-worker reset kwargs. If curriculum is enabled and no explicit
-        # per-worker `curriculum_state` is provided, plan a stratified batch so
-        # the overall batch matches the requested mix ratios.
+        # Build per-worker reset kwargs. Goal-stage mixing is assigned when
+        # workers are constructed; reset only handles explicit per-worker init
+        # overrides or lets each worker sample an init for its assigned goal.
         if kwargs is None:
             worker_kwargs = [None] * self.num_processes
         elif isinstance(kwargs, dict):
             # If caller provided an explicit `curriculum_state`, replicate it.
-            if "curriculum_state" in kwargs:
-                worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
-            elif self._curriculum_enabled and self._curriculum_stage_pools is not None:
-                # Plan a stratified batch and assign one state per worker
-                from agent_system.environments.env_package.discovery.curriculum import (
-                    plan_stratified_batch,
-                )
-
-                batch_plan = plan_stratified_batch(
-                    stage=self._curriculum_stage,
-                    batch_size=self.num_processes,
-                    stage_pools=self._curriculum_stage_pools,
-                    split=self._curriculum_split,
-                    mix_ratios=self._curriculum_mix_ratios,
-                    seed=self._curriculum_seed,
-                )
-                worker_kwargs = [{**dict(kwargs), "curriculum_state": state} for state in batch_plan]
-            else:
-                worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
+            # Otherwise each worker uses the goal stage assigned at construction
+            # and samples an init state for that goal during reset.
+            worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
         elif isinstance(kwargs, np.ndarray):
             worker_kwargs = kwargs.tolist()
         elif isinstance(kwargs, (list, tuple)):

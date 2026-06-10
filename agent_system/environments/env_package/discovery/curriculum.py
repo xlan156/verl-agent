@@ -249,6 +249,38 @@ def build_solution_curriculum_pools(
     )
     return split_states(states, train_fraction=train_fraction, seed=seed)
 
+def sample_solution_init_state(
+    solution_state: Any,
+    split: str = "train",
+    train_fraction: float = 0.7,
+    seed: int = 0,
+    num_chemicals: int = 4,
+    include_empty: bool = True,
+    include_same_total_neighbors: bool = True,
+) -> Tuple[int, ...]:
+    """Sample an init state for one fixed solution without stage mixing.
+
+    Stage mixing is handled at the environment-batch level by goal-state N.
+    This function only chooses a non-matching init state from the requested
+    train/val split for the already-selected goal.
+    """
+    pools = build_solution_curriculum_pools(
+        solution_state=solution_state,
+        num_chemicals=num_chemicals,
+        train_fraction=train_fraction,
+        seed=seed,
+        include_empty=include_empty,
+        include_same_total_neighbors=include_same_total_neighbors,
+    )
+    split_states_pool = pools.get(split, [])
+    if not split_states_pool:
+        split_states_pool = pools.get("all", [])
+
+    if not split_states_pool:
+        raise ValueError(f"No curriculum states available for split={split}")
+
+    return random.Random(seed).choice(list(split_states_pool))
+
 
 def sample_solution_curriculum_state(
     solution_state: Any,
@@ -368,6 +400,87 @@ def sample_mixed_curriculum_state(
 
     return rng.choice(available[-1][0])
 
+
+def plan_curriculum_goal_stages(
+    stage: int,
+    batch_size: int,
+    mix_ratios: Sequence[float] = (0.7, 0.2, 0.1),
+    seed: int = 0,
+) -> List[int]:
+    """Plan per-environment goal stages using current/previous/earlier ratios.
+
+    For stage=3 and batch_size=100, the default ratios produce 70 entries
+    with goal N=3, 20 entries with goal N=2, and 10 entries with goal N=1.
+    Earlier-stage quota is spread over stages 1..N-2 as evenly as possible.
+    """
+    stage = max(1, int(stage))
+    batch_size = max(0, int(batch_size))
+    if batch_size == 0:
+        return []
+
+    weights = list(mix_ratios[:3])
+    while len(weights) < 3:
+        weights.append(0.0)
+    weights = [max(0.0, float(weight)) for weight in weights]
+
+    buckets: List[List[int]] = [[stage]]
+    buckets.append([stage - 1] if stage - 1 >= 1 else [])
+    buckets.append(list(range(1, stage - 1)))
+
+    raw_counts = [max(0, int(round(batch_size * weight))) for weight in weights]
+    total_assigned = sum(raw_counts)
+    if total_assigned != batch_size:
+        largest_idx = int(max(range(len(weights)), key=lambda idx: weights[idx]))
+        raw_counts[largest_idx] += batch_size - total_assigned
+
+    counts = list(raw_counts)
+    available_idxs = [idx for idx, bucket in enumerate(buckets) if bucket]
+    if not available_idxs:
+        return []
+
+    for idx, bucket in enumerate(buckets):
+        if bucket or counts[idx] <= 0:
+            continue
+        quota = counts[idx]
+        counts[idx] = 0
+        weight_sum = sum(weights[j] for j in available_idxs)
+        if weight_sum <= 0:
+            target = available_idxs[0]
+            counts[target] += quota
+            continue
+        assigned = 0
+        for j in available_idxs:
+            add = int(round(quota * (weights[j] / weight_sum)))
+            counts[j] += add
+            assigned += add
+        while assigned < quota:
+            target = max(available_idxs, key=lambda j: weights[j])
+            counts[target] += 1
+            assigned += 1
+        while assigned > quota:
+            target = max(available_idxs, key=lambda j: counts[j])
+            counts[target] -= 1
+            assigned -= 1
+
+    while sum(counts) < batch_size:
+        target = max(available_idxs, key=lambda idx: weights[idx])
+        counts[target] += 1
+    while sum(counts) > batch_size:
+        target = max(available_idxs, key=lambda idx: counts[idx])
+        if counts[target] > 0:
+            counts[target] -= 1
+
+    rng = random.Random(seed)
+    planned: List[int] = []
+    for bucket_idx, count in enumerate(counts):
+        stages = buckets[bucket_idx]
+        if not stages:
+            continue
+        for offset in range(count):
+            planned.append(stages[offset % len(stages)])
+
+    rng.shuffle(planned)
+    return planned[:batch_size]
 
 def plan_curriculum_batch(
     stage: int,
