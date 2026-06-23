@@ -684,6 +684,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
         from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
         from agent_system.environments.env_package.discovery.utils import format_rust_update
+        from agent_system.environments.prompts.discoveryworld import format_current_chemicals
         
         postprocess_text_obs: List[str] = []
         discovery_cfg = getattr(self.config.env, "discoveryworld", None)
@@ -695,10 +696,12 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
             curriculum_state = infos[i].get("curriculum_state")
             curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
+            chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
             if init or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     max_chemical_n=max_chemical_n,
                     curriculum_state=curriculum_state_text,
+                    chemical_state=chemical_state,
                     state_obs=state_obs,
                     step_info=step_info,
                 )
@@ -725,6 +728,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     max_chemical_n=max_chemical_n,
                     curriculum_state=curriculum_state_text,
+                    chemical_state=chemical_state,
                     state_obs=state_obs,
                     step_info=step_info,
                     memory_actions=memory_actions,

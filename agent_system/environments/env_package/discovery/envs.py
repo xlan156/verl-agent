@@ -1,19 +1,47 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
 import json
+import logging
 import os
-import ray
 from copy import deepcopy
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
+import ray
 
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
 )
-from agent_system.environments.env_package.discovery.curriculum import *
+from agent_system.environments.env_package.discovery.curriculum import (
+    build_stage_pools,
+    normalize_chemical_state,
+    plan_curriculum_goal_stages,
+    sample_solution_init_state,
+    solution_dict_to_state,
+)
 from agent_system.environments.env_package.discovery.seed import build_fixed_seed_pools_by_amount
-from agent_system.environments.env_package.discovery.rule_based_agent import *
+from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
+from agent_system.environments.env_package.discovery.utils import (
+    SKILL_NAMES,
+    build_frames_dir,
+    compress_ui_observation,
+    extract_detailed_status,
+    format_rust_level,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _coerce_max_chemical_n(env_kwargs: Dict[str, Any], default: int = 2) -> int:
+    """Read the canonical chemical amount while accepting legacy config keys."""
+    return int(
+        env_kwargs.get(
+            "max_chemical_n",
+            env_kwargs.get("max_chemical_N", env_kwargs.get("chemical_N", default)),
+        )
+    )
 
 
 class DiscoveryWorldEnv:
@@ -247,10 +275,11 @@ class DiscoveryWorldEnv:
 
             skill_fn()
             self.action_history.append(skill_name)
-            success = bool(self._last_action_result.get("success", False))
+            success = bool((self._last_action_result or {}).get("success", False))
             action_status = "success" if success else "valid_but_failed"
 
         except Exception:
+            logger.exception("DiscoveryWorld skill failed: %s", skill_name)
             self._last_action_result = {"success": False, "message": "Action failed"}
             self.action_history.append(skill_name)
             action_status = "valid_but_failed"
@@ -272,23 +301,21 @@ class DiscoveryWorldEnv:
 
     def _game_progress_reward(self, cur_score: float) -> float:
         """Reward based on score increase."""
-        reward = cur_score - self._prev_score
-        self._prev_score = cur_score
-        return reward
+        return cur_score - self._prev_score
     
-    def _teacher_skill_reward(self, skill_name: Optional[str], info: Dict[str, Any]) -> float:
-        teacher_skill = self.teacher.select_skill(self._last_info)
+    def _teacher_skill_reward(self, skill_name: Optional[str], info: Optional[Dict[str, Any]]) -> float:
+        info = info or {}
+        teacher_skill = self.teacher.select_skill(self._last_info or info)
         self._last_teacher_skill = teacher_skill
         
         if not teacher_skill:
-            # Log cases where teacher couldn't decide
-            with open("teacher_skill.txt", "a") as f:
-                ui = (info.get("raw_observation") or {}).get("ui", {})
-                compressed_obs = compress_ui_observation(ui)
-                f.write("======================\n")
-                f.write(f"Current is_key_in_jar: {info.get('is_key_in_jar', False)}\n")
-                f.write(f"Current used_dispensers: {info.get('used_dispensers', {})}\n")
-                f.write(f"Observation:\n{compressed_obs}\n\n")
+            ui = (info.get("raw_observation") or {}).get("ui", {})
+            logger.debug(
+                "Teacher could not select a skill. is_key_in_jar=%s used_dispensers=%s observation=%s",
+                info.get("is_key_in_jar", False),
+                info.get("used_dispensers", {}),
+                compress_ui_observation(ui),
+            )
             return 0.0
         
         if skill_name == teacher_skill:
@@ -341,13 +368,13 @@ class DiscoveryWorldEnv:
             reward += 0.4
         return reward
     
-    def _no_progress_move_penalty(self, action, cur_score) -> float:
+    def _no_progress_move_penalty(self, action, cur_score: float, prev_score: float) -> float:
         """Penalty for moving but making no progress."""
         if len(self.location_history) < 4:
             return 0.0
 
         no_location_change = len(set(self.location_history[-4:])) == 1
-        no_score_change = abs(cur_score - self._prev_score) < 1e-6
+        no_score_change = abs(cur_score - prev_score) < 1e-6
 
         if no_score_change:
             if no_location_change:
@@ -368,14 +395,23 @@ class DiscoveryWorldEnv:
         info: Dict[str, Any],
     ) -> Tuple[float, bool]:
         cur_score = float(info.get("score_normalized", 0.0))
+        prev_score = self._prev_score
         game_progress_reward = self._game_progress_reward(cur_score)
         teacher_skill_reward = self._teacher_skill_reward(skill_name, self._last_info)
         stage_reward = self._stage_reward(self._last_info, info)
         
         repetition_penalty = self._repetition_penalty()
         invalid_penalty = self._invalid_action_penalty(info)
-        no_progress_penalty = self._no_progress_move_penalty(skill_name, cur_score)
+        no_progress_penalty = self._no_progress_move_penalty(skill_name, cur_score, prev_score)
         info["teacher_skill"] = self._last_teacher_skill
+        info["reward_components"] = {
+            "game_progress": game_progress_reward,
+            "teacher_skill": teacher_skill_reward,
+            "stage": stage_reward,
+            "repetition_penalty": repetition_penalty,
+            "invalid_penalty": invalid_penalty,
+            "no_progress_penalty": no_progress_penalty,
+        }
 
         task_completed = bool(self._api.areTasksComplete())
         done = task_completed or self._steps >= self._max_steps
@@ -397,6 +433,7 @@ class DiscoveryWorldEnv:
         else:
             reward += 10.0
 
+        self._prev_score = cur_score
         return reward, done
 
 
@@ -417,7 +454,10 @@ class DiscoveryWorldWorker:
         max_steps = int(env_kwargs.pop("max_steps", 50))
         save_frames = bool(env_kwargs.pop("save_frames", False))
         frames_dir = env_kwargs.pop("frames_dir", None)
-        max_chemical_n = int(env_kwargs.pop("max_chemical_n", env_kwargs.pop("max_chemical_N", env_kwargs.pop("chemical_N", 2))))
+        max_chemical_n = _coerce_max_chemical_n(env_kwargs)
+        env_kwargs.pop("max_chemical_n", None)
+        env_kwargs.pop("max_chemical_N", None)
+        env_kwargs.pop("chemical_N", None)
         self._default_reset_kwargs: Dict[str, Any] = {}
         if "curriculum_state" in env_kwargs:
             self._default_reset_kwargs["curriculum_state"] = env_kwargs.pop("curriculum_state")
@@ -483,6 +523,8 @@ class DiscoveryWorldVectorEnv:
         env_kwargs: Optional[Dict[str, Any]] = None,
         resources_per_worker: Optional[Dict[str, Any]] = None,
     ) -> None:
+        env_kwargs = dict(env_kwargs or {})
+
         # Allow env_num to be None (e.g. when val_batch_size is None)
         # In that case we simply create zero environments and return
         self.env_num = int(env_num) if env_num is not None else 0
@@ -494,7 +536,7 @@ class DiscoveryWorldVectorEnv:
         self._curriculum_enabled = bool(env_kwargs.get("curriculum_enabled", False))
         # Use a single curriculum stage value derived from explicit curriculum_stage
         # or fall back to max_chemical_n (canonical external config key).
-        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", env_kwargs.get("max_chemical_n", 2)))
+        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", _coerce_max_chemical_n(env_kwargs)))
         self._curriculum_train_fraction = float(env_kwargs.get("curriculum_train_fraction", 0.7))
         self._curriculum_mix_ratios = tuple(env_kwargs.get("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
         self._curriculum_seed = int(env_kwargs.get("curriculum_seed", seed))
@@ -525,11 +567,10 @@ class DiscoveryWorldVectorEnv:
         if not ray.is_initialized():
             ray.init(address="auto", ignore_reinit_error=True)
 
-        env_kwargs = env_kwargs or {}
         if "save_frames" not in env_kwargs:
             env_kwargs["save_frames"] = (not is_train)
         if env_kwargs.get("save_frames") and "frames_dir" not in env_kwargs:
-            env_kwargs["frames_dir"] = _build_frames_dir(env_kwargs, seed, is_train)
+            env_kwargs["frames_dir"] = build_frames_dir(env_kwargs, seed, is_train)
         env_kwargs["curriculum_enabled"] = self._curriculum_enabled
         env_kwargs["curriculum_train_fraction"] = self._curriculum_train_fraction
         env_kwargs["curriculum_mix_ratios"] = self._curriculum_mix_ratios
@@ -550,7 +591,7 @@ class DiscoveryWorldVectorEnv:
                 base_goal_stage_plan = [self._curriculum_stage] * self.env_num
             goal_stage_plan = [stage for stage in base_goal_stage_plan for _ in range(self.group_n)]
         else:
-            configured_chemical_n = int(env_kwargs.get("max_chemical_n", env_kwargs.get("max_chemical_N", 2)))
+            configured_chemical_n = _coerce_max_chemical_n(env_kwargs)
             goal_stage_plan = [configured_chemical_n] * self.num_processes
 
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)

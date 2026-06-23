@@ -14,6 +14,7 @@ from agent_system.environments.env_package.discovery.projection import (
 from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
     DISCOVERYWORLD_TEMPLATE,
+    format_current_chemicals,
 )
 from agent_system.memory import SimpleMemory
 
@@ -44,24 +45,18 @@ def build_prompt(
     history_length: int = 0,
 ) -> str:
 
-    task_description = info.get(
-        "task_description",
-        "You are playing the DiscoveryWorld Combinatorial Chemistry scenario.",
-    )
-    ui_json = text_obs
-
-    teleport_locations: Dict[str, Any] = info.get("teleport_locations", {}) or {}
-    teleport_str = "\n".join(loc for loc in teleport_locations.keys())
-
-    last_action_result = info.get("last_action_result", {}) or {}
-    last_result_str = json.dumps(last_action_result, ensure_ascii=False)
+    max_chemical_n = int(info.get("max_chemical_n", 2) or 2)
+    step_count = len(mem) if mem is not None else 0
+    step_info = f"Step: {step_count}"
+    chemical_state = format_current_chemicals(info.get("chemical_dict"), max_chemical_n)
+    state_obs = text_obs.replace("\\n", "\n")
 
     if len(mem) <= 0:
         prompt = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-            task_description=task_description,
-            ui_json=ui_json,
-            teleport_locations=teleport_str,
-            last_action_result=last_result_str,
+            max_chemical_n=max_chemical_n,
+            chemical_state=chemical_state,
+            state_obs=state_obs,
+            step_info=step_info,
         )
         return prompt
 
@@ -73,17 +68,12 @@ def build_prompt(
     history_block = memory_contexts[0]
     history_len = valid_lens[0]
 
-    step_count = len(mem)
-
     prompt = DISCOVERYWORLD_TEMPLATE.format(
-        task_description=task_description,
-        step_count=step_count,
-        history_length=history_len,
-        action_history=history_block,
-        current_step=step_count + 1,
-        ui_json=ui_json,
-        teleport_locations=teleport_str,
-        last_action_result=last_result_str,
+        max_chemical_n=max_chemical_n,
+        chemical_state=chemical_state,
+        state_obs=state_obs,
+        step_info=step_info,
+        memory_actions=history_block,
     )
     return prompt
 

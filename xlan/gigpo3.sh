@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=4:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=job_log/GiGPO-%j/Qwen0.5B-output.txt
 #SBATCH --error=job_log/GiGPO-%j/Qwen0.5B-error.txt
 
@@ -30,14 +30,14 @@ export RAY_ADDRESS="${head_node_ip}:${port}"
 MODEL_NAME=Qwen2.5-0.5B-Instruct
 PROJECT_NAME="GiGPO-discoveryworld"
 MODEL_PATH="sft/models/SFT-${MODEL_NAME}-merged"
-EXPERIMENT_NAME="GiGPO-${MODEL_NAME}"
+EXPERIMENT_NAME="GiGPO-${MODEL_NAME}-0608"
 SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
 DIFFICULTY="${DIFFICULTY:-Challenge}"
 
-TRAIN_SIZE=32
-VAL_SIZE=16
+TRAIN_SIZE=40
+VAL_SIZE=40
 num_cpus_per_env_worker=0.1
-GROUP_SIZE=4
+GROUP_SIZE=2
 num_gpus_per_node=1
 
 #python3 -m sft.SFTtrain
@@ -53,17 +53,17 @@ sleep 5
 # Data preparation: only indicates modality (text) and data size.
 python3 -m examples.data_preprocess.prepare \
     --mode 'text' \
-    --TRAIN_SIZE $TRAIN_SIZE \
-    --VAL_SIZE $VAL_SIZE
+    --train_data_size $TRAIN_SIZE \
+    --val_data_size $VAL_SIZE
 
 # Common configs
 LEARNING_RATE=5e-8
-KL_LOSS_COEF=0.15
-EPOCHS=35
+KL_LOSS_COEF=0.2
+EPOCHS=40
 
 # Curriculum configuration
 MAX_CHEMICAL_N=3
-MAX_STEP=5
+MAX_STEP=20
 CURRICULUM_ENABLED="${CURRICULUM_ENABLED:-True}"
 CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.8}"
 CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
@@ -83,7 +83,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path=$MODEL_PATH \
     actor_rollout_ref.actor.optim.lr=$LEARNING_RATE \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=4 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=$KL_LOSS_COEF \
@@ -92,11 +92,11 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=$num_gpus_per_node \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    actor_rollout_ref.rollout.temperature=0.8 \
+    actor_rollout_ref.rollout.temperature=0.9 \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
@@ -129,8 +129,8 @@ python3 -m verl.trainer.main_ppo \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \
-    trainer.PROJECT_NAME=$PROJECT_NAME \
-    trainer.EXPERIMENT_NAME=$EXPERIMENT_NAME \
+    trainer.project_name=$PROJECT_NAME \
+    trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.n_gpus_per_node=$num_gpus_per_node \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \

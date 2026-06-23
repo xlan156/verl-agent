@@ -1,19 +1,14 @@
-# Copyright 2025 Nanyang Technological University (NTU), Singapore
-# and the verl-agent (GiGPO) team.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+def format_current_chemicals(chemical_dict, max_chemical_n):
+    chemical_dict = chemical_dict or {}
+    chemicals = ["A", "B", "C", "D"]
+    counts = {chemical: int(chemical_dict.get(chemical, 0) or 0) for chemical in chemicals}
+    total = sum(counts.values())
+    current_chemicals = ", ".join(f"{chemical}={counts[chemical]}" for chemical in chemicals)
+    return (
+        f"Chemical amount in jar: {total} / {max_chemical_n}\n"
+        f"Current chemicals: {current_chemicals}"
+    )
 
-# --------------------- DiscoveryWorld --------------------- #
 
 DISCOVERYWORLD_TEMPLATE_NO_HIS = """
 [GOAL]
@@ -27,6 +22,7 @@ You need to
 
 [STATE]
 {step_info}
+{chemical_state}
 {state_obs}
 
 [OUTPUT]
@@ -62,6 +58,7 @@ You need to
 
 [STATE]
 {step_info}
+{chemical_state}
 {state_obs}
 
 [MEMORY]

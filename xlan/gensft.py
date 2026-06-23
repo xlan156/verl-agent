@@ -13,6 +13,7 @@ from agent_system.environments.env_package.discovery.utils import format_rust_up
 from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE,
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
+    format_current_chemicals,
 )
 from agent_system.environments.env_package.discovery.seed import build_fixed_seed_pools_by_amount
 
@@ -24,9 +25,11 @@ def build_prompt(
     max_steps: int,
     action_history: List[Dict[str, Any]],
     max_chemical_n: int,
+    chemical_dict: Dict[str, int] | None = None,
 ) -> str:
     step_info = f"Step: {step_count} / {max_steps}"
     curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
+    chemical_state = format_current_chemicals(chemical_dict, max_chemical_n)
 
     recent_records = action_history[-3:]
     if recent_records:
@@ -50,6 +53,7 @@ def build_prompt(
         return DISCOVERYWORLD_TEMPLATE.format(
             max_chemical_n=max_chemical_n,
             curriculum_state=curriculum_state_text,
+            chemical_state=chemical_state,
             state_obs=state_obs,
             step_info=step_info,
             memory_actions=memory_actions,
@@ -58,6 +62,7 @@ def build_prompt(
     return DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
         max_chemical_n=max_chemical_n,
         curriculum_state=curriculum_state_text,
+        chemical_state=chemical_state,
         state_obs=state_obs,
         step_info=step_info,
     )
@@ -93,6 +98,7 @@ def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]
                 max_steps=env._max_steps,
                 action_history=action_history,
                 max_chemical_n=env._max_chemical_n,
+                chemical_dict=info.get("chemical_dict"),
             )
             records.append(
                 {
@@ -139,7 +145,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--is-train", action="store_true", help="Generate training data (default: validation data).")
     parser.add_argument("--max-chemical-n", type=int, default=2, help="Total chemical amount.")
     parser.add_argument("--curriculum-seed", type=int, default=0, help="Seed used to build the fixed curriculum pool (default: --seed).")
-    parser.add_argument("--curriculum-train-fraction", type=float, default=0.8, help="Train fraction for the fixed curriculum pool.")
+    parser.add_argument("--curriculum-train-fraction", type=float, default=0.7, help="Train fraction for the fixed curriculum pool.")
     return parser.parse_args()
 
 
