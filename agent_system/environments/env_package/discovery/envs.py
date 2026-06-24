@@ -25,23 +25,15 @@ from agent_system.environments.env_package.discovery.skills import Combinatorial
 from agent_system.environments.env_package.discovery.utils import (
     SKILL_NAMES,
     build_frames_dir,
+    coerce_max_chemical_n,
     compress_ui_observation,
     extract_detailed_status,
     format_rust_level,
+    is_dispenser_skill,
 )
 
 
 logger = logging.getLogger(__name__)
-
-
-def _coerce_max_chemical_n(env_kwargs: Dict[str, Any], default: int = 2) -> int:
-    """Read the canonical chemical amount while accepting legacy config keys."""
-    return int(
-        env_kwargs.get(
-            "max_chemical_n",
-            env_kwargs.get("max_chemical_N", env_kwargs.get("chemical_N", default)),
-        )
-    )
 
 
 class DiscoveryWorldEnv:
@@ -251,13 +243,21 @@ class DiscoveryWorldEnv:
         skill_name = action_text if isinstance(action_text, str) and action_text in SKILL_NAMES else None
         is_valid = bool(skill_name)
 
-        # Invalid action path
+        # No skill extracted (``None`` from projection) is an intentional
+        # no-op transition.  We still advance the episode so GRPO receives a
+        # negative format signal, but never substitute or execute an arbitrary
+        # action on the model's behalf.
         if not is_valid:
             self.action_history.append("INVALID")
             self._steps += 1
+            self._last_action_result = {
+                "success": False,
+                "message": "No executable skill was produced",
+            }
 
             text_obs, info = self._format_obs_and_info()
-            info["action_status"] = "invalid"
+            info["action_status"] = "invalid_no_skill"
+            info["executed_action"] = None
             self._update_state_from_info(info)
             
             reward, done = self._compute_step_reward(None, info)
@@ -318,10 +318,15 @@ class DiscoveryWorldEnv:
             )
             return 0.0
         
+        # In the chemistry phase, the teacher only specifies the action class
+        # "add one chemical".  Any concrete dispenser A/B/C/D is a correct
+        # teacher action and receives the same shaping reward.
+        if is_dispenser_skill(teacher_skill):
+            return 1.0 if is_dispenser_skill(skill_name) else 0.0
+
         if skill_name == teacher_skill:
-            return 0.7
-        else:
-            return -0.05
+            return 1.0
+        return 0.0
 
     def _repetition_penalty(self) -> float:
         penalty = 0.0
@@ -334,8 +339,11 @@ class DiscoveryWorldEnv:
     def _invalid_action_penalty(self, info: Dict) -> float:
         """Penalty for invalid or failed actions."""
         action_status = info.get("action_status")
-        if action_status == "invalid":
-            return -0.5
+        if action_status == "invalid_no_skill":
+            # Keep this smaller than the terminal task reward.  The trainer
+            # separately applies is_action_valid's format penalty, so a large
+            # duplicate penalty would make early GRPO groups uniformly bad.
+            return -0.2
         elif action_status == "valid_but_failed":
             return -0.2
         else:
@@ -420,7 +428,7 @@ class DiscoveryWorldEnv:
         reward = 0.0
         # Positive rewards
         reward += 10.0 * game_progress_reward
-        # reward += teacher_skill_reward
+        reward += teacher_skill_reward
         # reward += stage_reward
 
         # Penalties
@@ -454,7 +462,7 @@ class DiscoveryWorldWorker:
         max_steps = int(env_kwargs.pop("max_steps", 50))
         save_frames = bool(env_kwargs.pop("save_frames", False))
         frames_dir = env_kwargs.pop("frames_dir", None)
-        max_chemical_n = _coerce_max_chemical_n(env_kwargs)
+        max_chemical_n = coerce_max_chemical_n(env_kwargs)
         env_kwargs.pop("max_chemical_n", None)
         env_kwargs.pop("max_chemical_N", None)
         env_kwargs.pop("chemical_N", None)
@@ -536,7 +544,7 @@ class DiscoveryWorldVectorEnv:
         self._curriculum_enabled = bool(env_kwargs.get("curriculum_enabled", False))
         # Use a single curriculum stage value derived from explicit curriculum_stage
         # or fall back to max_chemical_n (canonical external config key).
-        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", _coerce_max_chemical_n(env_kwargs)))
+        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", coerce_max_chemical_n(env_kwargs)))
         self._curriculum_train_fraction = float(env_kwargs.get("curriculum_train_fraction", 0.7))
         self._curriculum_mix_ratios = tuple(env_kwargs.get("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
         self._curriculum_seed = int(env_kwargs.get("curriculum_seed", seed))
@@ -591,7 +599,7 @@ class DiscoveryWorldVectorEnv:
                 base_goal_stage_plan = [self._curriculum_stage] * self.env_num
             goal_stage_plan = [stage for stage in base_goal_stage_plan for _ in range(self.group_n)]
         else:
-            configured_chemical_n = _coerce_max_chemical_n(env_kwargs)
+            configured_chemical_n = coerce_max_chemical_n(env_kwargs)
             goal_stage_plan = [configured_chemical_n] * self.num_processes
 
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)

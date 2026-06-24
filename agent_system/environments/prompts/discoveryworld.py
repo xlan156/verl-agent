@@ -26,15 +26,24 @@ You need to
 {state_obs}
 
 [OUTPUT]
-Return EXACTLY one of:
+Return exactly this two-part response and nothing else:
+<think>
+Briefly reason from the current state, goal, and recent outcomes.
+</think>
+<action>
+one_skill_name
+</action>
+
+`one_skill_name` must be EXACTLY one of:
 move_to_key
+move_to_jar
 pick_up_key
 pick_up_jar
 put_key_in_jar
-use_dispenser_A
-use_dispenser_B
-use_dispenser_C
-use_dispenser_D
+use_dispenser_A_on_jar
+use_dispenser_B_on_jar
+use_dispenser_C_on_jar
+use_dispenser_D_on_jar
 remove_chemical_A
 remove_chemical_B
 remove_chemical_C
@@ -42,7 +51,8 @@ remove_chemical_D
 wash_jar
 open_door
 
-Do not output multiple actions or anything else.
+Choose exactly one action. Do not put explanations outside `<think>` and do
+not put anything except the skill name inside `<action>`.
 """
 
 
@@ -67,15 +77,24 @@ You have taken the following actions in the 3 past steps, along with the key's r
 Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 
 [OUTPUT]
-Return EXACTLY one of:
+Return exactly this two-part response and nothing else:
+<think>
+Briefly reason from the current state, goal, and recent outcomes.
+</think>
+<action>
+one_skill_name
+</action>
+
+`one_skill_name` must be EXACTLY one of:
 move_to_key
+move_to_jar
 pick_up_key
 pick_up_jar
 put_key_in_jar
-use_dispenser_A
-use_dispenser_B
-use_dispenser_C
-use_dispenser_D
+use_dispenser_A_on_jar
+use_dispenser_B_on_jar
+use_dispenser_C_on_jar
+use_dispenser_D_on_jar
 remove_chemical_A
 remove_chemical_B
 remove_chemical_C
@@ -83,5 +102,6 @@ remove_chemical_D
 wash_jar
 open_door
 
-Do not output multiple actions or anything else.
+Choose exactly one action. Do not put explanations outside `<think>` and do
+not put anything except the skill name inside `<action>`.
 """

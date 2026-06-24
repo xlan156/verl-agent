@@ -3,6 +3,7 @@ import re
 import os
 import time
 
+
 all_plausible_action_json = [
     {"action": "PICKUP", "arg1": "33120"},
     {"action": "MOVE_DIRECTION", "arg1": "west"},
@@ -369,3 +370,22 @@ def compress_ui_observation(ui_obs: dict) -> str:
     lines.append(f"\nTask completed: {success}")
     
     return "\n".join(lines)
+
+
+def is_dispenser_skill(skill_name: Optional[str]) -> bool:
+    """Whether a skill belongs to the interchangeable "add chemical" class."""
+    return bool(
+        isinstance(skill_name, str)
+        and skill_name.startswith("use_dispenser_")
+        and skill_name.endswith("_on_jar")
+    )
+
+
+def coerce_max_chemical_n(env_kwargs: Dict[str, Any], default: int = 2) -> int:
+    """Read the canonical chemical amount while accepting legacy config keys."""
+    return int(
+        env_kwargs.get(
+            "max_chemical_n",
+            env_kwargs.get("max_chemical_N", env_kwargs.get("chemical_N", default)),
+        )
+    )

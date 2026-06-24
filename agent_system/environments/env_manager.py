@@ -660,9 +660,15 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         actions, valids = self.projection_f(text_actions, self.last_infos)
         text_obs, rewards, dones, infos = self.envs.step(actions)
 
+        # Keep failed formatting visible to the next prompt without claiming
+        # that an action was executed.  The environment itself receives None.
+        history_actions = [
+            action if action is not None else "<invalid format: no action executed>"
+            for action in actions
+        ]
         self.memory.store({
             "text_obs": self.pre_text_obs,
-            "action": actions,
+            "action": history_actions,
             "rust_level": [info.get("key_rust_level") for info in infos],
             "rust_status": [info.get("key_rust_status") for info in infos],
         })
@@ -674,6 +680,11 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
+            # The trainer consumes is_action_valid to add the per-step format
+            # penalty.  Keep an explicit diagnostic field as well: it makes
+            # it clear in rollout logs whether a zero reward came from the
+            # task or from a malformed <think>/<action> response.
+            info["response_format_valid"] = bool(valids[i])
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)
