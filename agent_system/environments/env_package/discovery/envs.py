@@ -19,24 +19,27 @@ from agent_system.environments.env_package.discovery.curriculum import (
     sample_solution_init_state,
     solution_dict_to_state,
 )
+from agent_system.environments.env_package.discovery.config import (
+    DiscoveryWorkerConfig,
+    build_frames_dir,
+    coerce_max_chemical_n,
+)
+from agent_system.environments.env_package.discovery.rewards import DiscoveryWorldRewardMixin
 from agent_system.environments.env_package.discovery.seed import build_fixed_seed_pools_by_amount
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 from agent_system.environments.env_package.discovery.utils import (
     SKILL_NAMES,
-    build_frames_dir,
-    coerce_max_chemical_n,
     compress_ui_observation,
     extract_detailed_status,
     format_rust_level,
-    is_dispenser_skill,
 )
 
 
 logger = logging.getLogger(__name__)
 
 
-class DiscoveryWorldEnv:
+class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
 
     def __init__(
         self,
@@ -235,7 +238,7 @@ class DiscoveryWorldEnv:
         
         return text_obs, info
 
-    def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
+    def step(self, action: Any, format_score: float = 0.0) -> Tuple[str, float, bool, Dict[str, Any]]:
         """Execute one step: validate action, execute if valid, compute reward."""
         assert self._api is not None
 
@@ -260,7 +263,7 @@ class DiscoveryWorldEnv:
             info["executed_action"] = None
             self._update_state_from_info(info)
             
-            reward, done = self._compute_step_reward(None, info)
+            reward, done = self._compute_step_reward(None, info, format_score=format_score)
             self._last_info = deepcopy(info)
             return text_obs, reward, done, info
 
@@ -291,158 +294,13 @@ class DiscoveryWorldEnv:
         info["action_status"] = action_status
         self._update_state_from_info(info)
         
-        reward, done = self._compute_step_reward(skill_name, info)
+        reward, done = self._compute_step_reward(skill_name, info, format_score=format_score)
         self._last_info = deepcopy(info)
         
         return text_obs, reward, done, info
 
     def close(self) -> None:
         return None
-
-    def _game_progress_reward(self, cur_score: float) -> float:
-        """Reward based on score increase."""
-        return cur_score - self._prev_score
-    
-    def _teacher_skill_reward(self, skill_name: Optional[str], info: Optional[Dict[str, Any]]) -> float:
-        info = info or {}
-        teacher_skill = self.teacher.select_skill(self._last_info or info)
-        self._last_teacher_skill = teacher_skill
-        
-        if not teacher_skill:
-            ui = (info.get("raw_observation") or {}).get("ui", {})
-            logger.debug(
-                "Teacher could not select a skill. is_key_in_jar=%s used_dispensers=%s observation=%s",
-                info.get("is_key_in_jar", False),
-                info.get("used_dispensers", {}),
-                compress_ui_observation(ui),
-            )
-            return 0.0
-        
-        # In the chemistry phase, the teacher only specifies the action class
-        # "add one chemical".  Any concrete dispenser A/B/C/D is a correct
-        # teacher action and receives the same shaping reward.
-        if is_dispenser_skill(teacher_skill):
-            return 1.0 if is_dispenser_skill(skill_name) else 0.0
-
-        if skill_name == teacher_skill:
-            return 1.0
-        return 0.0
-
-    def _repetition_penalty(self) -> float:
-        penalty = 0.0
-        if len(self.action_history) >= 3 and len(set(self.action_history[-3:])) == 1:
-            penalty = -0.1
-        if len(self.action_history) >= 4 and len(set(self.action_history[-4:])) == 1:
-            penalty = -0.2
-        return penalty
-    
-    def _invalid_action_penalty(self, info: Dict) -> float:
-        """Penalty for invalid or failed actions."""
-        action_status = info.get("action_status")
-        if action_status == "invalid_no_skill":
-            # Keep this smaller than the terminal task reward.  The trainer
-            # separately applies is_action_valid's format penalty, so a large
-            # duplicate penalty would make early GRPO groups uniformly bad.
-            return -0.2
-        elif action_status == "valid_but_failed":
-            return -0.2
-        else:
-            return 0.0
-    
-    def _stage_reward(self, last_info: Dict[str, Any], current_info: Dict[str, Any]) -> float:
-        """Reward for progress through key task stages.
-        
-        Args:
-            last_info: Previous step's info (or None on first step)
-            current_info: Current step's info
-        """
-        if last_info is None:
-            return 0.0
-        
-        reward = 0.0
-        prev_has_key = last_info.get("has_key", False)
-        prev_has_jar = last_info.get("has_jar", False)
-        prev_is_key_in_jar = last_info.get("is_key_in_jar", False)
-        
-        has_key = current_info.get("has_key", False)
-        has_jar = current_info.get("has_jar", False)
-        is_key_in_jar = current_info.get("is_key_in_jar", False)
-        
-        if has_key and not prev_has_key:
-            reward += 0.2
-        if has_jar and not prev_has_jar:
-            reward += 0.2
-        if is_key_in_jar and not prev_is_key_in_jar:
-            reward += 0.4
-        return reward
-    
-    def _no_progress_move_penalty(self, action, cur_score: float, prev_score: float) -> float:
-        """Penalty for moving but making no progress."""
-        if len(self.location_history) < 4:
-            return 0.0
-
-        no_location_change = len(set(self.location_history[-4:])) == 1
-        no_score_change = abs(cur_score - prev_score) < 1e-6
-
-        if no_score_change:
-            if no_location_change:
-                return -0.3
-            elif len(self.action_history) >= 2 and action == self.action_history[-2]: # Encourage trying different actions at each step
-                return -0.15
-            return -0.1
-        return 0.0
-
-    def clip_reward(self, reward):
-        """Clip reward to reasonable range."""
-        clipped = float(np.clip(reward, -1.0, 2.0))
-        return clipped
-    
-    def _compute_step_reward(
-        self,
-        skill_name: Optional[str],
-        info: Dict[str, Any],
-    ) -> Tuple[float, bool]:
-        cur_score = float(info.get("score_normalized", 0.0))
-        prev_score = self._prev_score
-        game_progress_reward = self._game_progress_reward(cur_score)
-        teacher_skill_reward = self._teacher_skill_reward(skill_name, self._last_info)
-        stage_reward = self._stage_reward(self._last_info, info)
-        
-        repetition_penalty = self._repetition_penalty()
-        invalid_penalty = self._invalid_action_penalty(info)
-        no_progress_penalty = self._no_progress_move_penalty(skill_name, cur_score, prev_score)
-        info["teacher_skill"] = self._last_teacher_skill
-        info["reward_components"] = {
-            "game_progress": game_progress_reward,
-            "teacher_skill": teacher_skill_reward,
-            "stage": stage_reward,
-            "repetition_penalty": repetition_penalty,
-            "invalid_penalty": invalid_penalty,
-            "no_progress_penalty": no_progress_penalty,
-        }
-
-        task_completed = bool(self._api.areTasksComplete())
-        done = task_completed or self._steps >= self._max_steps
-        info["won"] = task_completed
-
-        reward = 0.0
-        # Positive rewards
-        reward += 10.0 * game_progress_reward
-        reward += teacher_skill_reward
-        # reward += stage_reward
-
-        # Penalties
-        reward += repetition_penalty
-        reward += invalid_penalty
-        reward += no_progress_penalty
-        
-        if not task_completed:
-            reward = self.clip_reward(reward)
-        else:
-            reward += 10.0
-
-        self._prev_score = cur_score
-        return reward, done
 
 
 class DiscoveryWorldWorker:
@@ -456,39 +314,23 @@ class DiscoveryWorldWorker:
     ) -> None:
         self._seed = int(seed)
         self._thread_id = int(thread_id)
-        env_kwargs = dict(env_kwargs or {})
-        scenario_name = env_kwargs.pop("scenario_name", None)
-        difficulty = env_kwargs.pop("difficulty", None)
-        max_steps = int(env_kwargs.pop("max_steps", 50))
-        save_frames = bool(env_kwargs.pop("save_frames", False))
-        frames_dir = env_kwargs.pop("frames_dir", None)
-        max_chemical_n = coerce_max_chemical_n(env_kwargs)
-        env_kwargs.pop("max_chemical_n", None)
-        env_kwargs.pop("max_chemical_N", None)
-        env_kwargs.pop("chemical_N", None)
-        self._default_reset_kwargs: Dict[str, Any] = {}
-        if "curriculum_state" in env_kwargs:
-            self._default_reset_kwargs["curriculum_state"] = env_kwargs.pop("curriculum_state")
-        curriculum_enabled = bool(env_kwargs.pop("curriculum_enabled", False))
-        curriculum_train_fraction = float(env_kwargs.pop("curriculum_train_fraction", 0.7))
-        curriculum_mix_ratios = tuple(env_kwargs.pop("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
-        curriculum_seed = env_kwargs.pop("curriculum_seed", seed)
-        is_train = bool(env_kwargs.pop("is_train", True))
+        worker_config = DiscoveryWorkerConfig.from_env_kwargs(seed=seed, env_kwargs=env_kwargs)
+        self._default_reset_kwargs = worker_config.default_reset_kwargs
 
         self._env = DiscoveryWorldEnv(
             seed=seed,
-            scenario_name=scenario_name,
-            difficulty=difficulty,
-            max_steps=max_steps,
+            scenario_name=worker_config.scenario_name,
+            difficulty=worker_config.difficulty,
+            max_steps=worker_config.max_steps,
             thread_id=thread_id,
-            save_frames=save_frames,
-            frames_dir=frames_dir,
-            max_chemical_n=max_chemical_n,
-            curriculum_enabled=curriculum_enabled,
-            curriculum_train_fraction=curriculum_train_fraction,
-            curriculum_mix_ratios=curriculum_mix_ratios,
-            curriculum_seed=curriculum_seed,
-            is_train=is_train,
+            save_frames=worker_config.save_frames,
+            frames_dir=worker_config.frames_dir,
+            max_chemical_n=worker_config.max_chemical_n,
+            curriculum_enabled=worker_config.curriculum_enabled,
+            curriculum_train_fraction=worker_config.curriculum_train_fraction,
+            curriculum_mix_ratios=worker_config.curriculum_mix_ratios,
+            curriculum_seed=worker_config.curriculum_seed,
+            is_train=worker_config.is_train,
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
@@ -501,8 +343,8 @@ class DiscoveryWorldWorker:
             reset_kwargs["curriculum_state"] = kwargs
         return self._env.reset(kwargs=reset_kwargs)
 
-    def step(self, action: Any) -> Tuple[str, float, bool, Dict[str, Any]]:
-        return self._env.step(action)
+    def step(self, action: Any, format_score: float = 0.0) -> Tuple[str, float, bool, Dict[str, Any]]:
+        return self._env.step(action, format_score=format_score)
 
     def close(self) -> None:
         self._env.close()
@@ -661,7 +503,11 @@ class DiscoveryWorldVectorEnv:
 
         return obs_list, info_list
 
-    def step(self, actions: List[Any]) -> Tuple[List[str], List[float], List[bool], List[Dict[str, Any]]]:
+    def step(
+        self,
+        actions: List[Any],
+        format_scores: Optional[List[float]] = None,
+    ) -> Tuple[List[str], List[float], List[bool], List[Dict[str, Any]]]:
         if self.num_processes == 0:
             if len(actions) not in (0, None):
                 raise ValueError(
@@ -673,6 +519,12 @@ class DiscoveryWorldVectorEnv:
             raise ValueError(
                 f"Expected {self.num_processes} actions, got {len(actions)}",
             )
+        if format_scores is None:
+            format_scores = [0.0] * len(actions)
+        if len(format_scores) != self.num_processes:
+            raise ValueError(
+                f"Expected {self.num_processes} format scores, got {len(format_scores)}",
+            )
 
         obs_list: List[str] = []
         reward_list: List[float] = []
@@ -680,8 +532,8 @@ class DiscoveryWorldVectorEnv:
         info_list: List[Dict[str, Any]] = []
 
         futures = []
-        for worker, act in zip(self._workers, actions):
-            future = worker.step.remote(act)
+        for worker, act, format_score in zip(self._workers, actions, format_scores):
+            future = worker.step.remote(act, float(format_score))
             futures.append(future)
 
         results = ray.get(futures)

@@ -658,7 +658,13 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
-        text_obs, rewards, dones, infos = self.envs.step(actions)
+        from agent_system.environments.env_package.discovery.projection import response_format_score
+
+        # Keep execution strict, but pass a dense syntax score to the
+        # environment reward.  A malformed response never executes an action;
+        # it can only earn partial credit for moving closer to the schema.
+        format_scores = [response_format_score(response) for response in text_actions]
+        text_obs, rewards, dones, infos = self.envs.step(actions, format_scores=format_scores)
 
         # Keep failed formatting visible to the next prompt without claiming
         # that an action was executed.  The environment itself receives None.
@@ -685,6 +691,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             # it clear in rollout logs whether a zero reward came from the
             # task or from a malformed <think>/<action> response.
             info["response_format_valid"] = bool(valids[i])
+            info["response_format_score"] = float(format_scores[i])
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)

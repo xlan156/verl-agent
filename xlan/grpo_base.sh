@@ -33,8 +33,8 @@ MINI_BATCH_SIZE="${MINI_BATCH_SIZE:-32}"
 NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-1}"
 NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.1}"
 
-LEARNING_RATE="${LEARNING_RATE:-1e-7}"
-KL_LOSS_COEF="${KL_LOSS_COEF:-0.1}"
+LEARNING_RATE="${LEARNING_RATE:-1e-6}"
+KL_LOSS_COEF="${KL_LOSS_COEF:-0.02}"
 EPOCHS="${EPOCHS:-20}"
 MAX_STEP="${MAX_STEP:-20}"
 SAVE_FREQ="${SAVE_FREQ:-5}"
@@ -128,4 +128,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=5 \
     trainer.total_epochs=$EPOCHS \
     trainer.resume_mode=$RESUME_MODE \
+    trainer.resume_from_path=$RESUME_FROM_PATH \
     trainer.val_before_train=True "$@"

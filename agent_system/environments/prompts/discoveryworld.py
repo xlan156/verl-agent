@@ -25,14 +25,27 @@ You need to
 {chemical_state}
 {state_obs}
 
-[OUTPUT]
-Return exactly this two-part response and nothing else:
+[OUTPUT FORMAT — STRICT]
+Your entire reply must contain exactly two XML-style blocks, in this exact
+order: `<think>` followed by `<action>`. The first character of your reply
+must be `<` in `<think>`, and the final characters must be `</action>`.
+
+Use this exact shape (replace the example text with your own reasoning and
+chosen action):
 <think>
-Briefly reason from the current state, goal, and recent outcomes.
+The key has not been collected yet, so I should move to it first.
 </think>
 <action>
-one_skill_name
+move_to_key
 </action>
+
+Formatting rules:
+- Put exactly one short, state-grounded sentence (at most 20 words) only
+  inside `<think>...</think>`; do not make a plan, list, or add action names.
+- Put exactly one skill name only inside `<action>...</action>`.
+- Do not use Markdown, code fences, labels, bullets, extra tags, or any text
+  before, between, or after these two blocks.
+- Never place the action in `<think>` or the reasoning in `<action>`.
 
 `one_skill_name` must be EXACTLY one of:
 move_to_key
@@ -51,8 +64,8 @@ remove_chemical_D
 wash_jar
 open_door
 
-Choose exactly one action. Do not put explanations outside `<think>` and do
-not put anything except the skill name inside `<action>`.
+Before replying, check that the reply begins with `<think>` and ends with
+`</action>`. Begin now with `<think>`.
 """
 
 
@@ -76,14 +89,27 @@ You have taken the following actions in the 3 past steps, along with the key's r
 {memory_actions}
 Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 
-[OUTPUT]
-Return exactly this two-part response and nothing else:
+[OUTPUT FORMAT — STRICT]
+Your entire reply must contain exactly two XML-style blocks, in this exact
+order: `<think>` followed by `<action>`. The first character of your reply
+must be `<` in `<think>`, and the final characters must be `</action>`.
+
+Use this exact shape (replace the example text with your own reasoning and
+chosen action):
 <think>
-Briefly reason from the current state, goal, and recent outcomes.
+The key has not been collected yet, so I should move to it first.
 </think>
 <action>
-one_skill_name
+move_to_key
 </action>
+
+Formatting rules:
+- Put exactly one short, state-grounded sentence (at most 20 words) only
+  inside `<think>...</think>`; do not make a plan, list, or add action names.
+- Put exactly one skill name only inside `<action>...</action>`.
+- Do not use Markdown, code fences, labels, bullets, extra tags, or any text
+  before, between, or after these two blocks.
+- Never place the action in `<think>` or the reasoning in `<action>`.
 
 `one_skill_name` must be EXACTLY one of:
 move_to_key
@@ -102,6 +128,6 @@ remove_chemical_D
 wash_jar
 open_door
 
-Choose exactly one action. Do not put explanations outside `<think>` and do
-not put anything except the skill name inside `<action>`.
+Before replying, check that the reply begins with `<think>` and ends with
+`</action>`. Begin now with `<think>`.
 """

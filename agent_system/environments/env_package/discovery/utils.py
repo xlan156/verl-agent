@@ -1,7 +1,11 @@
 from typing import Dict, Any, List, Tuple, Optional
 import re
-import os
-import time
+
+from agent_system.environments.env_package.discovery.config import (
+    build_frames_dir,
+    coerce_max_chemical_n,
+    slugify,
+)
 
 
 all_plausible_action_json = [
@@ -148,26 +152,6 @@ SKILL_NAMES = {
     WASH,
     OPEN_DOOR
 }
-
-
-def slugify(value: Optional[str]) -> str:
-    text = (value or "").strip().lower()
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    return text.strip("-") or "unknown"
-
-
-def build_frames_dir(env_kwargs: Dict[str, Any], seed: int, is_train: bool) -> str:
-    scenario = slugify(env_kwargs.get("scenario_name"))
-    difficulty = slugify(env_kwargs.get("difficulty"))
-    model_name = env_kwargs.get("model_name") or os.environ.get("MODEL_NAME")
-    job_id = slugify(os.environ.get("SLURM_JOB_ID"))
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    split = "train" if is_train else "eval"
-    return os.path.join(
-        "outputs",
-        "discoveryworld_frames",
-        f"{model_name}__seed{seed}__{job_id}__{timestamp}__{split}",
-    )
 
 
 def key_name_to_rust_level_label(key_name: Optional[str]) -> Optional[str]:
@@ -380,12 +364,9 @@ def is_dispenser_skill(skill_name: Optional[str]) -> bool:
         and skill_name.endswith("_on_jar")
     )
 
-
-def coerce_max_chemical_n(env_kwargs: Dict[str, Any], default: int = 2) -> int:
-    """Read the canonical chemical amount while accepting legacy config keys."""
-    return int(
-        env_kwargs.get(
-            "max_chemical_n",
-            env_kwargs.get("max_chemical_N", env_kwargs.get("chemical_N", default)),
-        )
+def is_remove_skill(skill_name: Optional[str]) -> bool:
+    """Whether a skill belongs to the interchangeable "remove chemical" class."""
+    return bool(
+        isinstance(skill_name, str)
+        and skill_name.startswith("remove_chemical_")
     )

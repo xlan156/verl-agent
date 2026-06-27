@@ -1,22 +1,19 @@
 #!/bin/bash
-#SBATCH --partition=gpu_mig
-#SBATCH --job-name=GRPOn2
+#SBATCH --partition=gpu_h100
+#SBATCH --job-name=grpon2
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=9
+#SBATCH --cpus-per-task=16
 #SBATCH --time=4:00:00
-#SBATCH --output=job_log/GRPO-%j/Qwen0.5B-output.txt
-#SBATCH --error=job_log/GRPO-%j/Qwen0.5B-error.txt
-#SBATCH --reservation=terv92681
+#SBATCH --output=job_log/grpo-%j/Qwen0.5B-output.txt
+#SBATCH --error=job_log/grpo-%j/Qwen0.5B-error.txt
 
-export MAX_CHEMICAL_N=2
-export CURRICULUM_ENABLED=True
-export CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.5,0.4,0.1]}"
-export EPOCHS=30
+
+export EPOCHS=200
 export MAX_STEP=15
-export TRAIN_DATA_SIZE=8
-export VAL_DATA_SIZE=24
-export GROUP_SIZE=4
-export KL_LOSS_COEF=0.04
+export KL_LOSS_COEF=0.02
+export SAVE_FREQ=10
+export TRAIN_DATA_SIZE=32
+export VAL_DATA_SIZE=32
 
-bash xlan/grpo_base.sh "$@"
+bash xlan/grpo_base.sh  "$@"

@@ -111,14 +111,24 @@ def enumerate_nearby_init_states(
     num_chemicals: int = 4,
     include_empty: bool = False,
     include_same_total_neighbors: bool = True,
+    include_target: bool = True,
 ) -> List[Tuple[int, ...]]:
     """Enumerate init-state candidates near a target chemical state.
 
     The pool contains strict substates and, optionally, same-total one-transfer
-    neighbors such as (0, 1, 1, 0) for target (1, 1, 0, 0).
+    neighbors such as (0, 1, 1, 0) for target (1, 1, 0, 0).  By default it
+    also includes the target itself so curriculum resets can start from the
+    already-derusted state and teach the terminal ``open_door`` action.
     """
     target = normalize_chemical_state(target_state, num_chemicals=num_chemicals)
-    states = set(enumerate_substates(target, num_chemicals=num_chemicals, include_target=False, include_empty=include_empty))
+    states = set(
+        enumerate_substates(
+            target,
+            num_chemicals=num_chemicals,
+            include_target=include_target,
+            include_empty=include_empty,
+        )
+    )
 
     if include_same_total_neighbors:
         target_total = sum(target)
@@ -130,7 +140,11 @@ def enumerate_nearby_init_states(
             if _l1_distance(candidate, target) == 2:
                 states.add(tuple(int(value) for value in candidate))
 
-    states = {state for state in states if _is_below_similarity_threshold(state, target)}
+    states = {
+        state
+        for state in states
+        if state == target or _is_below_similarity_threshold(state, target)
+    }
     nearby_states = sorted(states, key=lambda candidate: (sum(candidate), candidate))
     return nearby_states
 
@@ -239,6 +253,7 @@ def build_solution_curriculum_pools(
     seed: int = 0,
     include_empty: bool = True,
     include_same_total_neighbors: bool = True,
+    include_target: bool = True,
 ) -> Dict[str, List[Tuple[int, ...]]]:
     """Build a disjoint train/val pool of nearby init states for one solution."""
     states = enumerate_nearby_init_states(
@@ -246,6 +261,7 @@ def build_solution_curriculum_pools(
         num_chemicals=num_chemicals,
         include_empty=include_empty,
         include_same_total_neighbors=include_same_total_neighbors,
+        include_target=include_target,
     )
     return split_states(states, train_fraction=train_fraction, seed=seed)
 
@@ -257,12 +273,14 @@ def sample_solution_init_state(
     num_chemicals: int = 4,
     include_empty: bool = True,
     include_same_total_neighbors: bool = True,
+    include_target: bool = True,
 ) -> Tuple[int, ...]:
     """Sample an init state for one fixed solution without stage mixing.
 
     Stage mixing is handled at the environment-batch level by goal-state N.
-    This function only chooses a non-matching init state from the requested
-    train/val split for the already-selected goal.
+    This function chooses an init state from the requested train/val split for
+    the already-selected goal.  The solution state itself is included by
+    default so the agent can practice the terminal ``open_door`` transition.
     """
     pools = build_solution_curriculum_pools(
         solution_state=solution_state,
@@ -271,6 +289,7 @@ def sample_solution_init_state(
         seed=seed,
         include_empty=include_empty,
         include_same_total_neighbors=include_same_total_neighbors,
+        include_target=include_target,
     )
     split_states_pool = pools.get(split, [])
     if not split_states_pool:
@@ -291,6 +310,7 @@ def sample_solution_curriculum_state(
     mix_ratios: Sequence[float] = (0.7, 0.2, 0.1),
     include_empty: bool = True,
     include_same_total_neighbors: bool = True,
+    include_target: bool = True,
 ) -> Tuple[int, ...]:
     """Sample a nearby init state of the given solution.
 
@@ -305,6 +325,7 @@ def sample_solution_curriculum_state(
         seed=seed,
         include_empty=include_empty,
         include_same_total_neighbors=include_same_total_neighbors,
+        include_target=include_target,
     )
     split_states_pool = pools.get(split, [])
     if not split_states_pool:

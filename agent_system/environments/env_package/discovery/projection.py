@@ -23,6 +23,9 @@ _THINK_ACTION_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_THINK_BLOCK_RE = re.compile(r"<think>\s*(?P<think>.*?)\s*</think>", re.IGNORECASE | re.DOTALL)
+_ACTION_BLOCK_RE = re.compile(r"<action>\s*(?P<action>.*?)\s*</action>", re.IGNORECASE | re.DOTALL)
+
 
 def _extract_skill(response: Any) -> Optional[str]:
     """Return the exact allowed skill from a well-formed model response."""
@@ -37,6 +40,47 @@ def _extract_skill(response: Any) -> Optional[str]:
     # environment's skill map.  The tags themselves stay case-insensitive.
     skill = match.group("action").strip()
     return skill if skill in SKILL_NAMES else None
+
+
+def response_format_score(response: Any) -> float:
+    """Return a dense, syntax-only reward for approaching the response schema.
+
+    Only a score of 1.0 is executable.  Lower scores deliberately leave the
+    action unexecuted, but let GRPO distinguish a response that is close to
+    the required schema from one with no useful structure at all.
+    """
+    if not isinstance(response, str):
+        return 0.0
+
+    strict_match = _THINK_ACTION_RE.fullmatch(response)
+    if strict_match is not None:
+        skill = strict_match.group("action").strip()
+        if strict_match.group("think").strip() and skill in SKILL_NAMES:
+            return 1.0
+
+    think_blocks = list(_THINK_BLOCK_RE.finditer(response))
+    action_blocks = list(_ACTION_BLOCK_RE.finditer(response))
+
+    # The model has emitted one usable action in an action block, but has not
+    # yet produced the complete, clean two-block response.
+    if len(action_blocks) == 1:
+        action = action_blocks[0].group("action").strip()
+        if action in SKILL_NAMES:
+            if len(think_blocks) == 1 and think_blocks[0].group("think").strip():
+                return 0.75
+            return 0.50
+
+    # Both block types exist, which is a useful precursor to the target
+    # protocol, but the action block is malformed or names an invalid skill.
+    if len(think_blocks) == 1 and think_blocks[0].group("think").strip() and len(action_blocks) == 1:
+        return 0.25
+
+    # Reward a non-empty thought block slightly: it gives malformed groups a
+    # direction toward the required order without making it executable.
+    if len(think_blocks) == 1 and think_blocks[0].group("think").strip():
+        return 0.10
+
+    return 0.0
 
 
 def discoveryworld_projection(
