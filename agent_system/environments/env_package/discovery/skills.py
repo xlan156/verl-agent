@@ -1,7 +1,12 @@
 import random
 import re
+from typing import Any, Tuple
 
-from agent_system.environments.env_package.discovery.helpers import *
+from agent_system.environments.env_package.discovery.curriculum import (
+    CHEMICAL_ORDER,
+    normalize_chemical_state,
+)
+from agent_system.environments.env_package.discovery.utils import *
 
 class CombinatorialChemistrySkill():
     def __init__(self, env):
@@ -31,11 +36,54 @@ class CombinatorialChemistrySkill():
                 lambda x=i: self.remove_one_chemical(x)
             )
         self.skill_names = list(self.skill_mapping.keys())
+
+    def _ensure_key_and_jar_ready(self):
+        self.update_ui_and_location()
+        has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
+
+        if not has_key and not is_key_in_jar:
+            self.move_to_key()
+            self.pick_up_key()
+            self.update_ui_and_location()
+            has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
+
+        if has_key and not has_jar:
+            self.move_to_jar()
+            self.pick_up_jar()
+            self.update_ui_and_location()
+            has_key, has_jar, is_key_in_jar, _, _ = extract_detailed_status(self.ui)
+
+        if has_key and has_jar and not is_key_in_jar:
+            self.put_key_in_jar()
+            self.update_ui_and_location()
+
+    def prepare_chemical_state(self, target_state: Any, rebuild_from_scratch: bool = True) -> Tuple[int, ...]:
+        """Prepare a curriculum start state before the agent begins acting."""
+        target = normalize_chemical_state(target_state, num_chemicals=len(CHEMICAL_ORDER))
+
+        self._ensure_key_and_jar_ready()
+        if rebuild_from_scratch:
+            self.wash_jar()
+            self._ensure_key_and_jar_ready()
+
+        for chemical_name, count in zip(CHEMICAL_ORDER, target):
+            for _ in range(count):
+                self.use_dispenser_on_jar(chemical_name)
+
+        self.settle_reactions()
+        self.update_ui_and_location()
+        return target
+
+    def settle_reactions(self, max_ticks: int = 3) -> None:
+        """Let jar mixtures react before exposing a curriculum reset state."""
+        for _ in range(max_ticks):
+            self.env._api.tick()
+        self.update_ui_and_location()
     
     def update_ui_and_location(self):
         self.ui = self.env._api.getAgentObservation(agentIdx=0).get("ui")
         self.location = (self.ui.get("agentLocation").get("x"), self.ui.get("agentLocation").get("y"))
-        _, _, _, self.chemical_dict = extract_detailed_status(self.ui)
+        _, _, _, self.chemical_dict, _ = extract_detailed_status(self.ui)
 
     def sample_random_skill(self):
         return random.choice(self.skill_names)
@@ -151,7 +199,7 @@ class CombinatorialChemistrySkill():
 
 if __name__ == "__main__":
     from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-    env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, chemical_N=2)
+    env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, max_chemical_n=2)
     _, info = env.reset()
     skill_agent = CombinatorialChemistrySkill(env)
     skill_agent.move_to_key()

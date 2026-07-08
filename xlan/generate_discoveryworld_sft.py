@@ -11,6 +11,8 @@ from tqdm import trange
 from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
     DISCOVERYWORLD_TEMPLATE,
+    format_current_chemicals,
+    format_key_status,
 )
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
 from agent_system.environments.env_package.discovery.projection_old import (
@@ -93,22 +95,21 @@ def collect_sft_episodes(
 
             for step_idx in range(max_env_steps):
                 # Gather real UI/text and metadata from env
-                task_description = info.get("task_description", "") or f"Episode {ep} task in DiscoveryWorld."
-                ui_json = text_obs
-
-                teleport_locations: Dict[str, Any] = info.get("teleport_locations", {}) or {}
-                teleport_str = "\n".join(loc for loc in teleport_locations.keys())
-                last_action_result: Dict[str, Any] = info.get("last_action_result", {}) or {}
-                last_result_str = json.dumps(last_action_result, ensure_ascii=False)
+                max_chemical_n = int(info.get("max_chemical_n", 2) or 2)
+                step_info = f"Step: {len(mem[0])} / {max_env_steps}"
+                chemical_state = format_current_chemicals(info.get("chemical_dict"), max_chemical_n)
+                key_state = format_key_status(info.get("key_rust_status"))
+                state_obs = text_obs.replace("\\n", "\n")
 
                 # Decide whether to use history template
                 if history_length <= 0 or len(mem[0]) == 0:
                     # No history yet, or disabled
                     prompt = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-                        task_description=task_description,
-                        ui_json=ui_json,
-                        teleport_locations=teleport_str,
-                        last_action_result=last_result_str,
+                        max_chemical_n=max_chemical_n,
+                        chemical_state=chemical_state,
+                        key_state=key_state,
+                        state_obs=state_obs,
+                        step_info=step_info,
                     )
                 else:
                     memory_contexts, valid_lens = mem.fetch(
@@ -120,14 +121,12 @@ def collect_sft_episodes(
                     history_len = valid_lens[0]
 
                     prompt = DISCOVERYWORLD_TEMPLATE.format(
-                        task_description=task_description,
-                        step_count=len(mem[0]),
-                        history_length=history_len,
-                        action_history=history_block,
-                        current_step=len(mem[0]) + 1,
-                        ui_json=ui_json,
-                        teleport_locations=teleport_str,
-                        last_action_result=last_result_str,
+                        max_chemical_n=max_chemical_n,
+                        chemical_state=chemical_state,
+                        key_state=key_state,
+                        state_obs=state_obs,
+                        step_info=step_info,
+                        memory_actions=history_block,
                     )
                 
                 #actions = extract_unique_actions("sft/sft_pairs_combinatorial_chemistry_easy5.jsonl")

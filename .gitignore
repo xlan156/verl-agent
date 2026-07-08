@@ -139,4 +139,7 @@ Qwen2.5-1.5B-Instruct/
 Qwen2.5-0.5B-Instruct/
 qwen_apikey.txt
 xlan-scripts/
+qwen_hf_model/
 
+xlan/curriculum_pool_summary.csv
+xlan/VENV安装.txt

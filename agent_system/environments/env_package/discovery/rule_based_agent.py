@@ -1,7 +1,7 @@
-from agent_system.environments.env_package.discovery.helpers import *
-from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 import random
 from copy import deepcopy
+from agent_system.environments.env_package.discovery.utils import *
+
 
 class RulebasedAgent:
     """
@@ -161,7 +161,7 @@ class RulebasedAgentSkill:
         if rusted_key_in_hand and JAR in inv_objects and not is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        if self.env._chemical_N == 1:
+        if self.env._max_chemical_n == 1:
             chem = random.choice(["A", "B", "C", "D"])
             target_dispenser_location = {
                 "A": (18, 12),
@@ -180,10 +180,10 @@ class RulebasedAgentSkill:
             if KEY_NO_RUST in inv_objects:
                 return self.skill("open_door")
         
-        if self.env._chemical_N > 1:
+        if self.env._max_chemical_n > 1:
             chem = random.choice(["A", "B", "C", "D"])
             sum_chemical_dict = sum(info.get("chemical_dict", {}).values())
-            if sum_chemical_dict < self.env._chemical_N:
+            if sum_chemical_dict < self.env._max_chemical_n:
                 if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
                     return self.skill(f"use_dispenser_{chem}_on_jar")
                 if KEY_NO_RUST in inv_objects:
@@ -207,7 +207,7 @@ if __name__ == "__main__":
         difficulty="Challenge",
         seed=17,
         max_steps=70,
-        chemical_N=3,
+        max_chemical_n=3,
     )
     agent = RulebasedAgentSkill(env)
 

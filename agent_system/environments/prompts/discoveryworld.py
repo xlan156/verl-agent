@@ -1,90 +1,75 @@
-# Copyright 2025 Nanyang Technological University (NTU), Singapore
-# and the verl-agent (GiGPO) team.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+def format_current_chemicals(chemical_dict, max_chemical_n):
+    chemical_dict = chemical_dict or {}
+    chemicals = ["A", "B", "C", "D"]
+    counts = {chemical: int(chemical_dict.get(chemical, 0) or 0) for chemical in chemicals}
+    total = sum(counts.values())
+    current_chemicals = ", ".join(f"{chemical}={counts[chemical]}" for chemical in chemicals)
+    return (
+        f"Chemical amount in jar / Required chemical amount: {total} / {max_chemical_n}\n"
+        f"Current chemicals: {current_chemicals}"
+    )
 
-# --------------------- DiscoveryWorld --------------------- #
+
+def format_key_status(key_rust_status):
+    rust_status = str(key_rust_status or "unknown").strip().lower()
+    ready_to_open = rust_status == "no rust"
+    return f"Rust level: {rust_status}\nReady to open: {ready_to_open}"
+
 
 DISCOVERYWORLD_TEMPLATE_NO_HIS = """
-[GOAL]
-You are an expert agent in a room with a rusted key and a locked door.
-You need to 
-1. Find the key, pick it up and put it in the jar.
-2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {chemical_N}.
-4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+[TASK]
+You need to find the rusted key, use a jar to apply chemicals to derust it, and then open the door.
+There are 4 types of chemicals: A, B, C, D. A hidden target chemical combination is required to derust the key.
+You need to infer the correct combination of chemicals, by analyzing whether the rust level reduces from current chemical combination.
+Use the dispenser to add chemicals to the jar, and remove chemicals if necessary.
+When key is no rust, you can choose to open the door.
 
 [STATE]
 {step_info}
+{chemical_state}
+{key_state}
 {state_obs}
 
-[OUTPUT]
-Return EXACTLY one of:
-move_to_key
-pick_up_key
-pick_up_jar
-put_key_in_jar
-use_dispenser_A
-use_dispenser_B
-use_dispenser_C
-use_dispenser_D
-remove_chemical_A
-remove_chemical_B
-remove_chemical_C
-remove_chemical_D
-wash_jar
-open_door
+[VALID SKILLS]
+{valid_skills}
 
-Do not output multiple actions or anything else.
+[RESPONSE]
+Return exactly this format and no other text:
+<think>
+one short state-based reason
+</think>
+<action>
+one valid skill name
+</action>
 """
 
 
 DISCOVERYWORLD_TEMPLATE = """
-[GOAL]
-You are an expert agent in a room with a rusted key and a locked door.
-You need to 
-1. Find the key, pick it up and put it in the jar.
-2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {chemical_N}.
-4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+[TASK]
+You need to find the rusted key, use a jar to apply chemicals to derust it, and then open the door.
+There are 4 types of chemicals: A, B, C, D. A hidden target chemical combination is required to derust the key.
+You need to infer the correct combination of chemicals, by analyzing whether the rust level reduces from current chemical combination.
+Use the dispenser to add chemicals to the jar, and remove chemicals if necessary.
+When key is no rust, you can choose to open the door.
 
 [STATE]
 {step_info}
+{chemical_state}
+{key_state}
 {state_obs}
 
-[MEMORY]
-You have taken the following actions in the 3 past steps:
+[RECENT ACTIONS]
 {memory_actions}
-Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 
-[OUTPUT]
-Return EXACTLY one of:
-move_to_key
-pick_up_key
-pick_up_jar
-put_key_in_jar
-use_dispenser_A
-use_dispenser_B
-use_dispenser_C
-use_dispenser_D
-remove_chemical_A
-remove_chemical_B
-remove_chemical_C
-remove_chemical_D
-wash_jar
-open_door
+[VALID SKILLS]
+{valid_skills}
 
-Do not output multiple actions or anything else.
+[RESPONSE]
+Return exactly this format and no other text:
+<think>
+one short state-based reason
+</think>
+<action>
+one valid skill name
+</action>
 """

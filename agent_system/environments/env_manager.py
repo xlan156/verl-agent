@@ -57,6 +57,7 @@ def parse_gamefile(infos):
             gamefile.append(None)
     return gamefile
 
+
 def set_gamefile(infos, gamefile):
     for i in range(len(infos)):
         if 'extra.gamefile' in infos[i]:
@@ -631,11 +632,27 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        from agent_system.environments.env_package.discovery.helpers import all_action_abbr
+        from agent_system.environments.env_package.discovery.utils import all_action_abbr
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
-        text_obs, infos = self.envs.reset(kwargs=kwargs)
+        reset_kwargs = kwargs
+        if reset_kwargs is None:
+            discovery_cfg = getattr(self.config.env, "discoveryworld", None)
+            curriculum_cfg = getattr(discovery_cfg, "curriculum", None)
+            from agent_system.environments.env_package.discovery.config import coerce_bool
+
+            curriculum_enabled = coerce_bool(
+                getattr(curriculum_cfg, "enabled", getattr(discovery_cfg, "curriculum_enabled", False)),
+            )
+            reset_kwargs = getattr(discovery_cfg, "curriculum_state", None) if curriculum_enabled else None
+            if reset_kwargs is not None:
+                if isinstance(reset_kwargs, (list, tuple)) and reset_kwargs and isinstance(reset_kwargs[0], (list, tuple, dict)):
+                    reset_kwargs = list(reset_kwargs)
+                else:
+                    reset_kwargs = {"curriculum_state": reset_kwargs}
+
+        text_obs, infos = self.envs.reset(kwargs=reset_kwargs)
 
         self.memory.reset(batch_size=len(text_obs))
         self.tasks = [info.get("task_description", "") for info in infos]
@@ -647,9 +664,30 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
-        text_obs, rewards, dones, infos = self.envs.step(actions)
+        from agent_system.environments.env_package.discovery.projection import response_format_score
 
-        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        # Keep execution strict, but pass a dense syntax score to the
+        # environment reward.  A malformed response never executes an action;
+        # it can only earn partial credit for moving closer to the schema.
+        format_scores = [response_format_score(response) for response in text_actions]
+        format_scores = [
+            0.0 if action is None and score >= 1.0 else score
+            for action, score in zip(actions, format_scores)
+        ]
+        text_obs, rewards, dones, infos = self.envs.step(actions, format_scores=format_scores)
+
+        # Keep failed formatting visible to the next prompt without claiming
+        # that an action was executed.  The environment itself receives None.
+        history_actions = [
+            action if action is not None else "<invalid format: no action executed>"
+            for action in actions
+        ]
+        self.memory.store({
+            "text_obs": self.pre_text_obs,
+            "action": history_actions,
+            "rust_level": [info.get("key_rust_level") for info in infos],
+            "rust_status": [info.get("key_rust_status") for info in infos],
+        })
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
@@ -658,6 +696,12 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
+            # The trainer consumes is_action_valid to add the per-step format
+            # penalty.  Keep an explicit diagnostic field as well: it makes
+            # it clear in rollout logs whether a zero reward came from the
+            # task or from a malformed <think>/<action> response.
+            info["response_format_valid"] = bool(valids[i])
+            info["response_format_score"] = float(format_scores[i])
 
         next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
         rewards = to_numpy(rewards)
@@ -666,38 +710,67 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         return next_observations, rewards, dones, infos
 
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
+        from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
+        from agent_system.environments.env_package.discovery.utils import (
+            format_rust_update,
+            get_valid_discoveryworld_skills,
+        )
+        from agent_system.environments.prompts.discoveryworld import format_current_chemicals, format_key_status
+        
         postprocess_text_obs: List[str] = []
         discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-        chemical_n = getattr(discovery_cfg, "chemical_N", 2)
-
-        if not init and self.config.env.history_length > 0:
-            memory_contexts, valid_lens = self.memory.fetch(
-                self.config.env.history_length,
-                obs_key="text_obs",
-                action_key="action",
-            )
-        else:
-            memory_contexts, valid_lens = None, None
+        max_chemical_n = getattr(discovery_cfg, "max_chemical_n", getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)))
 
         for i in range(len(text_obs)):
             state_obs = text_obs[i]
             state_obs = state_obs.replace("\\n", "\n")
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
-            if init or self.config.env.history_length <= 0 or memory_contexts is None:
+            curriculum_state = infos[i].get("curriculum_state")
+            curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
+            chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
+            key_state = format_key_status(infos[i].get("key_rust_status"))
+            valid_skill_names = get_valid_discoveryworld_skills(infos[i], max_chemical_n=max_chemical_n)
+            infos[i]["valid_skills"] = list(valid_skill_names)
+            valid_skills = "\n".join(valid_skill_names)
+            if init or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-                    chemical_N=chemical_n,
+                    max_chemical_n=max_chemical_n,
+                    curriculum_state=curriculum_state_text,
+                    chemical_state=chemical_state,
+                    key_state=key_state,
                     state_obs=state_obs,
                     step_info=step_info,
+                    valid_skills=valid_skills,
                 )
             else:
-                # Keep only the last 2 mapped action skills.
-                recent_actions = [record.get("action") for record in self.memory[i][-3:]]
-                memory_actions = "\n".join(a for a in recent_actions if a)
+                recent_records = self.memory[i][-self.config.env.history_length:]
+                history_start_index = len(self.memory[i]) - len(recent_records)
+
+                if history_start_index > 0 and len(self.memory[i]) > len(recent_records):
+                    previous_rust_level = self.memory[i][history_start_index - 1].get("rust_level")
+                else:
+                    previous_rust_level = None
+
+                memory_lines = []
+                for step_offset, record in enumerate(recent_records):
+                    action = record.get("action")
+                    rust_level = record.get("rust_level")
+                    if not action:
+                        continue
+                    rust_update = format_rust_update(previous_rust_level, rust_level)
+                    memory_lines.append(f"{step_offset + 1}. {action} -> {rust_update}")
+                    previous_rust_level = rust_level
+
+                memory_actions = "\n".join(memory_lines)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
-                    chemical_N=chemical_n,
+                    max_chemical_n=max_chemical_n,
+                    curriculum_state=curriculum_state_text,
+                    chemical_state=chemical_state,
+                    key_state=key_state,
                     state_obs=state_obs,
                     step_info=step_info,
                     memory_actions=memory_actions,
+                    valid_skills=valid_skills,
                 )
             postprocess_text_obs.append(obs)
 
@@ -806,25 +879,53 @@ def make_envs(config):
     
     elif "discoveryworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.discovery import build_discoveryworld_envs, discoveryworld_projection
+        from agent_system.environments.env_package.discovery.config import coerce_bool
 
         # Optional nested config: env.discoveryworld.{scenario_name,difficulty}
         discovery_cfg = getattr(config.env, "discoveryworld", None)
         scenario_name = getattr(discovery_cfg, "scenario_name", "Combinatorial Chemistry")
         difficulty = getattr(discovery_cfg, "difficulty", "Challenge")
-        chemical_N = getattr(discovery_cfg, "chemical_N", 2)
+        max_chemical_n = getattr(discovery_cfg, "max_chemical_n", getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)))
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
+        curriculum_cfg = getattr(discovery_cfg, "curriculum", None)
+        curriculum_enabled = coerce_bool(getattr(curriculum_cfg, "enabled", getattr(discovery_cfg, "curriculum_enabled", False)))
+        curriculum_stage = getattr(curriculum_cfg, "stage", getattr(discovery_cfg, "curriculum_stage", max_chemical_n))
+        curriculum_train_fraction = getattr(curriculum_cfg, "train_fraction", getattr(discovery_cfg, "curriculum_train_fraction", 0.7))
+        target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
+        curriculum_mix_ratios = getattr(curriculum_cfg, "mix_ratios", getattr(discovery_cfg, "curriculum_mix_ratios", (0.7, 0.2, 0.1)))
+        curriculum_seed = getattr(curriculum_cfg, "seed", getattr(discovery_cfg, "curriculum_seed", config.env.seed))
+        curriculum_terminal_reset_ratio = getattr(
+            curriculum_cfg,
+            "terminal_reset_ratio",
+            getattr(discovery_cfg, "curriculum_terminal_reset_ratio", 0.0),
+        )
+        curriculum_terminal_reset_eval = coerce_bool(getattr(
+            curriculum_cfg,
+            "terminal_reset_eval",
+            getattr(discovery_cfg, "curriculum_terminal_reset_eval", False),
+        ))
+        env_variant = getattr(discovery_cfg, "env_variant", "original")
 
         env_kwargs = {
             "scenario_name": scenario_name,
             "difficulty": difficulty,
+            "env_variant": env_variant,
             "max_steps": config.env.max_steps,
             "train_size": config.data.train_batch_size,
             "val_size": config.data.val_batch_size,
-            "chemical_N": chemical_N
+            "max_chemical_n": max_chemical_n,
+            "curriculum_enabled": curriculum_enabled,
+            "curriculum_stage": curriculum_stage,
+            "curriculum_train_fraction": curriculum_train_fraction,
+            "target_train_fraction": target_train_fraction,
+            "curriculum_mix_ratios": curriculum_mix_ratios,
+            "curriculum_seed": curriculum_seed,
+            "curriculum_terminal_reset_ratio": curriculum_terminal_reset_ratio,
+            "curriculum_terminal_reset_eval": curriculum_terminal_reset_eval,
         }
         if save_frames is not None:
-            env_kwargs["save_frames"] = bool(save_frames)
+            env_kwargs["save_frames"] = coerce_bool(save_frames)
         if frames_dir:
             env_kwargs["frames_dir"] = frames_dir
 

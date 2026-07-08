@@ -24,28 +24,15 @@ def expand_seedpool(seed_pool: List[int], target_size: int) -> List[int]:
 	return out
 
 
-def assign_split_seeds(
+def _build_fixed_seed_pool(
 	base_seed: int,
-	train_size: int,
-	val_size: int,
 	num_chemicals: int = 4,
 	min_chemicals: int = 1,
 	min_amount: int = 2,
 	max_amount: int = 2,
+	train_fraction: float = 0.7,
 ) -> Dict[str, List[int]]:
-	"""Assign deterministic train/val seeds from chemical-combination index space.
-
-	1) Enumerate all valid chemical combinations and use their indices as candidate seeds.
-	2) Shuffle deterministically with base_seed.
-	3) Randomly partition candidates into train/val pools (no overlap).
-	4) Expand each pool to requested size by cyclic repetition when needed.
-
-	Special case: if both train_size and val_size are 0, split the full candidate pool
-	into train/val with val taking 1/4 of the combinations and without cyclic reuse.
-	"""
-	train_size = int(train_size)
-	val_size = int(val_size)
-
+	"""Build a deterministic train/val seed pool that does not depend on runtime sizes."""
 	all_combinations = mkEnumerateChemicalCombinations(
 		numChemicals=int(num_chemicals),
 		minChemicals=int(min_chemicals),
@@ -55,44 +42,125 @@ def assign_split_seeds(
 	total_combinations = len(all_combinations)
 	if total_combinations <= 0:
 		raise ValueError("No valid chemical combinations available for seed assignment")
-	zero_zero_default = train_size == 0 and val_size == 0
-	if zero_zero_default:
-		val_size = max(1, total_combinations // 4)
-		train_size = total_combinations - val_size
-	else:
-		train_size = max(train_size, 0)
-		val_size = max(val_size, 0)
 
 	candidate_seeds = list(range(total_combinations))
 	rng = random.Random(int(base_seed))
 	rng.shuffle(candidate_seeds)
 
-	if train_size > 0 and val_size > 0 and total_combinations >= 2:
-		train_ratio = train_size / float(train_size + val_size)
-		train_pool_size = int(round(total_combinations * train_ratio))
-		train_pool_size = max(1, min(total_combinations - 1, train_pool_size))
-	elif train_size > 0:
-		train_pool_size = total_combinations
-	else:
-		train_pool_size = 0
-
-	train_pool = candidate_seeds[:train_pool_size]
-	val_pool = candidate_seeds[train_pool_size:]
-
-	if train_size > 0 and not train_pool:
+	train_fraction = min(max(float(train_fraction), 0.0), 1.0)
+	if total_combinations == 1:
 		train_pool = candidate_seeds[:1]
-	if val_size > 0 and not val_pool:
-		if len(candidate_seeds) > 1:
-			val_pool = candidate_seeds[-1:]
-		else:
-			val_pool = candidate_seeds[:1]
-
-	if zero_zero_default:
-		train_seeds = train_pool[:train_size]
-		val_seeds = val_pool[:val_size]
+		val_pool = candidate_seeds[:1]
 	else:
-		train_seeds = expand_seedpool(train_pool, train_size)
-		val_seeds = expand_seedpool(val_pool, val_size)
+		train_pool_size = int(round(total_combinations * train_fraction))
+		train_pool_size = max(1, min(total_combinations - 1, train_pool_size))
+		train_pool = candidate_seeds[:train_pool_size]
+		val_pool = candidate_seeds[train_pool_size:]
+		if not val_pool:
+			val_pool = candidate_seeds[-1:]
+
+	return {
+		"train": train_pool,
+		"val": val_pool,
+	}
+
+
+def build_fixed_seed_pools_by_amount(
+	base_seed: int,
+	max_amount: int,
+	num_chemicals: int = 4,
+	min_chemicals: int = 1,
+	train_fraction: float = 0.7,
+) -> Dict[int, Dict[str, List[int]]]:
+	"""Prebuild fixed train/val seed pools for every chemical amount up to max_amount."""
+	max_amount = max(1, int(max_amount))
+	pools: Dict[int, Dict[str, List[int]]] = {}
+	for amount in range(1, max_amount + 1):
+		pools[amount] = _build_fixed_seed_pool(
+			base_seed=base_seed + amount,
+			num_chemicals=num_chemicals,
+			min_chemicals=min_chemicals,
+			min_amount=amount,
+			max_amount=amount,
+			train_fraction=train_fraction,
+		)
+	return pools
+
+
+def build_ordered_seed_pools_by_amount(
+	max_amount: int,
+	num_chemicals: int = 4,
+	min_chemicals: int = 1,
+	train_fraction: float = 0.8,
+) -> Dict[int, Dict[str, List[int]]]:
+	"""Split target seeds by the canonical combination order without shuffling.
+
+	This is used when curriculum is disabled: train and val should cycle through
+	disjoint, easy-to-inspect target pools while preserving DiscoveryWorld's
+	stable target ordering.
+	"""
+	max_amount = max(1, int(max_amount))
+	train_fraction = min(max(float(train_fraction), 0.0), 1.0)
+	pools: Dict[int, Dict[str, List[int]]] = {}
+	for amount in range(1, max_amount + 1):
+		all_combinations = mkEnumerateChemicalCombinations(
+			numChemicals=int(num_chemicals),
+			minChemicals=int(min_chemicals),
+			minAmount=int(amount),
+			maxAmount=int(amount),
+		)
+		total_combinations = len(all_combinations)
+		if total_combinations <= 0:
+			raise ValueError("No valid chemical combinations available for seed assignment")
+
+		candidate_seeds = list(range(total_combinations))
+		if total_combinations == 1:
+			train_pool = candidate_seeds[:1]
+			val_pool = candidate_seeds[:1]
+		else:
+			train_pool_size = int(round(total_combinations * train_fraction))
+			train_pool_size = max(1, min(total_combinations - 1, train_pool_size))
+			train_pool = candidate_seeds[:train_pool_size]
+			val_pool = candidate_seeds[train_pool_size:]
+			if not val_pool:
+				val_pool = candidate_seeds[-1:]
+
+		pools[amount] = {
+			"train": train_pool,
+			"val": val_pool,
+		}
+	return pools
+
+
+def assign_split_seeds(
+	base_seed: int,
+	train_size: int,
+	val_size: int,
+	num_chemicals: int = 4,
+	min_chemicals: int = 1,
+	min_amount: int = 2,
+	max_amount: int = 2,
+) -> Dict[str, List[int]]:
+	"""Assign deterministic train/val seeds from a fixed chemical-combination pool.
+
+	The train/val pools are determined only by the chemical combination space and
+	base_seed. Requested train_size/val_size only control how many seeds are sampled
+	from those pools, using cyclic reuse when necessary.
+	"""
+	train_size = int(train_size)
+	val_size = int(val_size)
+	train_size = max(train_size, 0)
+	val_size = max(val_size, 0)
+
+	pools = _build_fixed_seed_pool(
+		base_seed=base_seed,
+		num_chemicals=num_chemicals,
+		min_chemicals=min_chemicals,
+		min_amount=min_amount,
+		max_amount=max_amount,
+	)
+	train_seeds = expand_seedpool(pools["train"], train_size)
+	val_seeds = expand_seedpool(pools["val"], val_size)
 
 	return {
 		"train": train_seeds,
@@ -134,4 +202,3 @@ def main() -> None:
 
 if __name__ == "__main__":
 	main()
-
