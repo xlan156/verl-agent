@@ -87,6 +87,51 @@ def build_fixed_seed_pools_by_amount(
 	return pools
 
 
+def build_ordered_seed_pools_by_amount(
+	max_amount: int,
+	num_chemicals: int = 4,
+	min_chemicals: int = 1,
+	train_fraction: float = 0.8,
+) -> Dict[int, Dict[str, List[int]]]:
+	"""Split target seeds by the canonical combination order without shuffling.
+
+	This is used when curriculum is disabled: train and val should cycle through
+	disjoint, easy-to-inspect target pools while preserving DiscoveryWorld's
+	stable target ordering.
+	"""
+	max_amount = max(1, int(max_amount))
+	train_fraction = min(max(float(train_fraction), 0.0), 1.0)
+	pools: Dict[int, Dict[str, List[int]]] = {}
+	for amount in range(1, max_amount + 1):
+		all_combinations = mkEnumerateChemicalCombinations(
+			numChemicals=int(num_chemicals),
+			minChemicals=int(min_chemicals),
+			minAmount=int(amount),
+			maxAmount=int(amount),
+		)
+		total_combinations = len(all_combinations)
+		if total_combinations <= 0:
+			raise ValueError("No valid chemical combinations available for seed assignment")
+
+		candidate_seeds = list(range(total_combinations))
+		if total_combinations == 1:
+			train_pool = candidate_seeds[:1]
+			val_pool = candidate_seeds[:1]
+		else:
+			train_pool_size = int(round(total_combinations * train_fraction))
+			train_pool_size = max(1, min(total_combinations - 1, train_pool_size))
+			train_pool = candidate_seeds[:train_pool_size]
+			val_pool = candidate_seeds[train_pool_size:]
+			if not val_pool:
+				val_pool = candidate_seeds[-1:]
+
+		pools[amount] = {
+			"train": train_pool,
+			"val": val_pool,
+		}
+	return pools
+
+
 def assign_split_seeds(
 	base_seed: int,
 	train_size: int,
@@ -157,4 +202,3 @@ def main() -> None:
 
 if __name__ == "__main__":
 	main()
-

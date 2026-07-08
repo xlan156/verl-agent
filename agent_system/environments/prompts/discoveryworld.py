@@ -5,129 +5,71 @@ def format_current_chemicals(chemical_dict, max_chemical_n):
     total = sum(counts.values())
     current_chemicals = ", ".join(f"{chemical}={counts[chemical]}" for chemical in chemicals)
     return (
-        f"Chemical amount in jar: {total} / {max_chemical_n}\n"
+        f"Chemical amount in jar / Required chemical amount: {total} / {max_chemical_n}\n"
         f"Current chemicals: {current_chemicals}"
     )
 
 
+def format_key_status(key_rust_status):
+    rust_status = str(key_rust_status or "unknown").strip().lower()
+    ready_to_open = rust_status == "no rust"
+    return f"Rust level: {rust_status}\nReady to open: {ready_to_open}"
+
+
 DISCOVERYWORLD_TEMPLATE_NO_HIS = """
-[GOAL]
-You are an expert agent in a room with a rusted key and a locked door.
-You need to 
-1. Find the key, pick it up and put it in the jar.
-2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {max_chemical_n}.
-4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+[TASK]
+You need to find the rusted key, use a jar to apply chemicals to derust it, and then open the door.
+There are 4 types of chemicals: A, B, C, D. A hidden target chemical combination is required to derust the key.
+You need to infer the correct combination of chemicals, by analyzing whether the rust level reduces from current chemical combination.
+Use the dispenser to add chemicals to the jar, and remove chemicals if necessary.
+When key is no rust, you can choose to open the door.
 
 [STATE]
 {step_info}
 {chemical_state}
+{key_state}
 {state_obs}
 
-[OUTPUT FORMAT — STRICT]
-Your entire reply must contain exactly two XML-style blocks, in this exact
-order: `<think>` followed by `<action>`. The first character of your reply
-must be `<` in `<think>`, and the final characters must be `</action>`.
+[VALID SKILLS]
+{valid_skills}
 
-Use this exact shape (replace the example text with your own reasoning and
-chosen action):
+[RESPONSE]
+Return exactly this format and no other text:
 <think>
-The key has not been collected yet, so I should move to it first.
+one short state-based reason
 </think>
 <action>
-move_to_key
+one valid skill name
 </action>
-
-Formatting rules:
-- Put exactly one short, state-grounded sentence (at most 20 words) only
-  inside `<think>...</think>`; do not make a plan, list, or add action names.
-- Put exactly one skill name only inside `<action>...</action>`.
-- Do not use Markdown, code fences, labels, bullets, extra tags, or any text
-  before, between, or after these two blocks.
-- Never place the action in `<think>` or the reasoning in `<action>`.
-
-`one_skill_name` must be EXACTLY one of:
-move_to_key
-move_to_jar
-pick_up_key
-pick_up_jar
-put_key_in_jar
-use_dispenser_A_on_jar
-use_dispenser_B_on_jar
-use_dispenser_C_on_jar
-use_dispenser_D_on_jar
-remove_chemical_A
-remove_chemical_B
-remove_chemical_C
-remove_chemical_D
-wash_jar
-open_door
-
-Before replying, check that the reply begins with `<think>` and ends with
-`</action>`. Begin now with `<think>`.
 """
 
 
 DISCOVERYWORLD_TEMPLATE = """
-[GOAL]
-You are an expert agent in a room with a rusted key and a locked door.
-You need to 
-1. Find the key, pick it up and put it in the jar.
-2. Take the jar to the dispensers to derust the key.
-3. Total amount of chemicals in the jar must reach {max_chemical_n}.
-4. You can remove chemicals from the jar if you have excessive amount of chemicals.
-5. When the chemical combination matches, the key will be derusted. Open the door and exit.
+[TASK]
+You need to find the rusted key, use a jar to apply chemicals to derust it, and then open the door.
+There are 4 types of chemicals: A, B, C, D. A hidden target chemical combination is required to derust the key.
+You need to infer the correct combination of chemicals, by analyzing whether the rust level reduces from current chemical combination.
+Use the dispenser to add chemicals to the jar, and remove chemicals if necessary.
+When key is no rust, you can choose to open the door.
 
 [STATE]
 {step_info}
 {chemical_state}
+{key_state}
 {state_obs}
 
-[MEMORY]
-You have taken the following actions in the 3 past steps, along with the key's rust level after each step:
+[RECENT ACTIONS]
 {memory_actions}
-Try some different actions from the past 3 steps. Focus on next subgoals and avoid repeating the same actions.
 
-[OUTPUT FORMAT — STRICT]
-Your entire reply must contain exactly two XML-style blocks, in this exact
-order: `<think>` followed by `<action>`. The first character of your reply
-must be `<` in `<think>`, and the final characters must be `</action>`.
+[VALID SKILLS]
+{valid_skills}
 
-Use this exact shape (replace the example text with your own reasoning and
-chosen action):
+[RESPONSE]
+Return exactly this format and no other text:
 <think>
-The key has not been collected yet, so I should move to it first.
+one short state-based reason
 </think>
 <action>
-move_to_key
+one valid skill name
 </action>
-
-Formatting rules:
-- Put exactly one short, state-grounded sentence (at most 20 words) only
-  inside `<think>...</think>`; do not make a plan, list, or add action names.
-- Put exactly one skill name only inside `<action>...</action>`.
-- Do not use Markdown, code fences, labels, bullets, extra tags, or any text
-  before, between, or after these two blocks.
-- Never place the action in `<think>` or the reasoning in `<action>`.
-
-`one_skill_name` must be EXACTLY one of:
-move_to_key
-move_to_jar
-pick_up_key
-pick_up_jar
-put_key_in_jar
-use_dispenser_A_on_jar
-use_dispenser_B_on_jar
-use_dispenser_C_on_jar
-use_dispenser_D_on_jar
-remove_chemical_A
-remove_chemical_B
-remove_chemical_C
-remove_chemical_D
-wash_jar
-open_door
-
-Before replying, check that the reply begins with `<think>` and ends with
-`</action>`. Begin now with `<think>`.
 """

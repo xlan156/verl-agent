@@ -256,14 +256,23 @@ def build_solution_curriculum_pools(
     include_target: bool = True,
 ) -> Dict[str, List[Tuple[int, ...]]]:
     """Build a disjoint train/val pool of nearby init states for one solution."""
+    target = normalize_chemical_state(solution_state, num_chemicals=num_chemicals)
     states = enumerate_nearby_init_states(
-        solution_state,
+        target,
         num_chemicals=num_chemicals,
         include_empty=include_empty,
         include_same_total_neighbors=include_same_total_neighbors,
         include_target=include_target,
     )
-    return split_states(states, train_fraction=train_fraction, seed=seed)
+    pools = split_states(states, train_fraction=train_fraction, seed=seed)
+    if include_target:
+        pools["train"] = [state for state in pools.get("train", []) if state != target]
+        pools["val"] = [state for state in pools.get("val", []) if state != target]
+        pools["train"].append(target)
+        pools["all"] = list(pools.get("all", []))
+        if target not in pools["all"]:
+            pools["all"].append(target)
+    return pools
 
 def sample_solution_init_state(
     solution_state: Any,

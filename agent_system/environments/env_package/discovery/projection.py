@@ -10,7 +10,10 @@ both the ``think`` and ``action`` portions of the policy.
 from typing import Any, Dict, List, Optional, Tuple
 import re
 
-from agent_system.environments.env_package.discovery.utils import SKILL_NAMES
+from agent_system.environments.env_package.discovery.utils import (
+    SKILL_NAMES,
+    get_valid_discoveryworld_skills,
+)
 
 
 # The anchors deliberately reject extra prose, a second action, or an action
@@ -89,20 +92,25 @@ def discoveryworld_projection(
 ) -> Tuple[List[Optional[str]], List[int]]:
     """Extract one skill and report whether the complete response is valid.
 
-    ``infos`` remains an optional argument for compatibility with the
-    environment-manager projection interface; action availability is encoded
-    by ``SKILL_NAMES`` for this task.
+    ``infos`` is used when available to reject skills that are globally valid
+    but unavailable in the current high-level task phase.
     """
-    del infos  # Kept in the signature so callers can share a projection API.
-
     # ``None`` is intentional.  It says no environment skill was extracted;
     # the environment then produces an invalid/no-op transition and its
     # associated reward.  A magic fallback string can accidentally become a
     # real action in a future environment implementation.
     processed: List[Optional[str]] = []
     valids: List[int] = []
-    for response in actions:
+    infos = list(infos or [])
+    if len(infos) < len(actions):
+        infos.extend([None] * (len(actions) - len(infos)))
+    for response, info in zip(actions, infos):
         skill = _extract_skill(response)
+        if skill is not None and info is not None:
+            max_chemical_n = int((info or {}).get("max_chemical_n", 2) or 2)
+            valid_skills = set(get_valid_discoveryworld_skills(info, max_chemical_n=max_chemical_n))
+            if skill not in valid_skills:
+                skill = None
         processed.append(skill)
         valids.append(int(skill is not None))
     return processed, valids

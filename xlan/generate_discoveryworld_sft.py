@@ -12,6 +12,7 @@ from agent_system.environments.prompts.discoveryworld import (
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
     DISCOVERYWORLD_TEMPLATE,
     format_current_chemicals,
+    format_key_status,
 )
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
 from agent_system.environments.env_package.discovery.projection_old import (
@@ -97,6 +98,7 @@ def collect_sft_episodes(
                 max_chemical_n = int(info.get("max_chemical_n", 2) or 2)
                 step_info = f"Step: {len(mem[0])} / {max_env_steps}"
                 chemical_state = format_current_chemicals(info.get("chemical_dict"), max_chemical_n)
+                key_state = format_key_status(info.get("key_rust_status"))
                 state_obs = text_obs.replace("\\n", "\n")
 
                 # Decide whether to use history template
@@ -105,6 +107,7 @@ def collect_sft_episodes(
                     prompt = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                         max_chemical_n=max_chemical_n,
                         chemical_state=chemical_state,
+                        key_state=key_state,
                         state_obs=state_obs,
                         step_info=step_info,
                     )
@@ -120,6 +123,7 @@ def collect_sft_episodes(
                     prompt = DISCOVERYWORLD_TEMPLATE.format(
                         max_chemical_n=max_chemical_n,
                         chemical_state=chemical_state,
+                        key_state=key_state,
                         state_obs=state_obs,
                         step_info=step_info,
                         memory_actions=history_block,

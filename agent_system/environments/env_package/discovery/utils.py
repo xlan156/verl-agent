@@ -103,7 +103,7 @@ KEY_NO_RUST = "key (no rust)"
 JAR = "jar"
 DOOR = "door"
 TABLE = "table"
-OTHER_OBJECTS = ["wall", "floor", "path", "grass", "table"]
+OTHER_OBJECTS = ["wall", "floor", "path", "grass", "table", "agent"]
 
 KEY_NAME_TO_RUST_LABEL = {
     RUSTED_KEY: "heavily rusted",
@@ -135,6 +135,24 @@ REMOVE_CHEMICAL_D = "remove_chemical_D"
 WASH = "wash_jar"
 OPEN_DOOR = "open_door"
 
+ORDERED_SKILL_NAMES = (
+    MOVE_TO_KEY,
+    MOVE_TO_JAR,
+    PICK_UP_KEY,
+    PICK_UP_JAR,
+    PUT_KEY_IN_JAR,
+    USE_DISPENSER_A,
+    REMOVE_CHEMICAL_A,
+    USE_DISPENSER_B,
+    REMOVE_CHEMICAL_B,
+    USE_DISPENSER_C,
+    REMOVE_CHEMICAL_C,
+    USE_DISPENSER_D,
+    REMOVE_CHEMICAL_D,
+    WASH,
+    OPEN_DOOR,
+)
+
 SKILL_NAMES = {
     MOVE_TO_KEY,
     MOVE_TO_JAR,
@@ -152,6 +170,85 @@ SKILL_NAMES = {
     WASH,
     OPEN_DOOR
 }
+
+
+def _object_names_by_location(ui: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    inventory = ui.get("inventoryObjects", []) or []
+    accessible = ui.get("accessibleEnvironmentObjects", []) or []
+    inv_objects = {
+        obj.get("name"): obj
+        for obj in inventory
+        if obj.get("name") and obj.get("name") not in OTHER_OBJECTS
+    }
+    accessible_objects = {
+        obj.get("name"): obj
+        for obj in accessible
+        if obj.get("name") and obj.get("name") not in OTHER_OBJECTS
+    }
+    return inv_objects, accessible_objects
+
+
+def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical_n: int = 2) -> List[str]:
+    """Return state-dependent high-level skills following the rule-based phase order."""
+    info = info or {}
+    ui = (info.get("raw_observation") or {}).get("ui", {})
+    inv_objects, accessible_objects = _object_names_by_location(ui)
+    location_info = ui.get("agentLocation", {}) or {}
+    location = (location_info.get("x"), location_info.get("y"))
+
+    rusted_key_names = (RUSTED_KEY, RUSTED_KEY_2, RUSTED_KEY_3)
+    rusted_key_in_hand = any(name in inv_objects for name in rusted_key_names)
+    rusted_key_accessible = any(name in accessible_objects for name in rusted_key_names)
+    clean_key_in_hand = KEY_NO_RUST in inv_objects
+    clean_key_accessible = KEY_NO_RUST in accessible_objects
+
+    has_key = bool(info.get("has_key")) or rusted_key_in_hand or clean_key_in_hand
+    has_jar = bool(info.get("has_jar")) or JAR in inv_objects
+    is_key_in_jar = bool(info.get("is_key_in_jar"))
+    rust_status = str(info.get("key_rust_status") or "").strip().lower()
+
+    if clean_key_accessible and not clean_key_in_hand:
+        return [PICK_UP_KEY]
+
+    if clean_key_in_hand or (has_key and rust_status == "no rust"):
+        return [OPEN_DOOR]
+
+    if not has_key and not is_key_in_jar:
+        if rusted_key_accessible or location == (17, 12):
+            return [PICK_UP_KEY]
+        return [MOVE_TO_KEY]
+
+    if (has_key or is_key_in_jar) and not has_jar:
+        if JAR in accessible_objects or location == (17, 12):
+            return [PICK_UP_JAR]
+        return [MOVE_TO_JAR]
+
+    if has_key and has_jar and not is_key_in_jar:
+        return [PUT_KEY_IN_JAR]
+
+    if is_key_in_jar and has_jar:
+        chemical_dict = info.get("chemical_dict") or {}
+        chemical_total = sum(int(chemical_dict.get(name, 0) or 0) for name in ("A", "B", "C", "D"))
+        max_chemical_n = max(1, int(max_chemical_n or 1))
+
+        if rust_status == "no rust":
+            return [OPEN_DOOR]
+
+        if chemical_total < max_chemical_n:
+            return [USE_DISPENSER_A, USE_DISPENSER_B, USE_DISPENSER_C, USE_DISPENSER_D]
+
+        removable = []
+        for chemical_name, skill_name in (
+            ("A", REMOVE_CHEMICAL_A),
+            ("B", REMOVE_CHEMICAL_B),
+            ("C", REMOVE_CHEMICAL_C),
+            ("D", REMOVE_CHEMICAL_D),
+        ):
+            if int(chemical_dict.get(chemical_name, 0) or 0) > 0:
+                removable.append(skill_name)
+        return removable or [WASH]
+
+    return list(ORDERED_SKILL_NAMES)
 
 
 def key_name_to_rust_level_label(key_name: Optional[str]) -> Optional[str]:
@@ -326,9 +423,9 @@ def compress_ui_observation(ui_obs: dict) -> str:
     accessible_objects = [_strip_uuid(f"{obj.get('description', '')}")
                             for obj in accessible if obj.get("name") not in OTHER_OBJECTS]
     if accessible_objects:
-        lines.append(f"Accessible: {', '.join(accessible_objects)}")
+        lines.append(f"Accessible (facing): {', '.join(accessible_objects)}")
     else:
-        lines.append("Accessible: no object is accessible in current location and facing direction")
+        lines.append("Accessible (facing): no object is accessible in current location and facing direction")
     
     # 4. Nearby Objects (only interesting objects within certain steps, grouped by direction)
     nearby = ui_obs.get("nearbyObjects", {}).get("objects", {})
@@ -336,7 +433,7 @@ def compress_ui_observation(ui_obs: dict) -> str:
     for direction, objects in nearby.items():
         for obj in objects:
             distance = obj.get("distance", 99)
-            if distance <= 2 and obj.get("name") not in OTHER_OBJECTS:
+            if 0 < distance <= 2 and obj.get("name") not in OTHER_OBJECTS:
                 desc = _strip_uuid(f"{obj.get('description', '')}")
                 lines.append(f"- {direction} ({distance} tile(s) away): {desc}")
     

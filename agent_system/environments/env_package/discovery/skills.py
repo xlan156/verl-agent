@@ -70,8 +70,15 @@ class CombinatorialChemistrySkill():
             for _ in range(count):
                 self.use_dispenser_on_jar(chemical_name)
 
+        self.settle_reactions()
         self.update_ui_and_location()
         return target
+
+    def settle_reactions(self, max_ticks: int = 3) -> None:
+        """Let jar mixtures react before exposing a curriculum reset state."""
+        for _ in range(max_ticks):
+            self.env._api.tick()
+        self.update_ui_and_location()
     
     def update_ui_and_location(self):
         self.ui = self.env._api.getAgentObservation(agentIdx=0).get("ui")

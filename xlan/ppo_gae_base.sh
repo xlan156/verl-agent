@@ -17,8 +17,8 @@ export head_node_ip=$(hostname --ip-address)
 export port="${RAY_PORT:-6300}"
 export RAY_ADDRESS="${head_node_ip}:${port}"
 
-# Shared experiment configuration. Thin wrapper scripts should override these
-# variables so comparison runs differ only in the intended experimental factor.
+# Shared PPO/GAE DiscoveryWorld configuration. Thin wrapper scripts can
+# override these variables so runs differ only in the intended factor.
 MODEL_NAME="${MODEL_NAME:-Qwen2.5-0.5B-Instruct}"
 PROJECT_NAME="${PROJECT_NAME:-Combinatorial-Chemistry-Agent}"
 MODEL_PATH="${MODEL_PATH:-Qwen/${MODEL_NAME}}"
@@ -27,18 +27,20 @@ DIFFICULTY="${DIFFICULTY:-Challenge}"
 
 TRAIN_DATA_SIZE="${TRAIN_DATA_SIZE:-32}"
 VAL_DATA_SIZE="${VAL_DATA_SIZE:-32}"
-GROUP_SIZE="${GROUP_SIZE:-2}"
 MINI_BATCH_SIZE="${MINI_BATCH_SIZE:-8}"
 NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-1}"
 NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.1}"
 
 LEARNING_RATE="${LEARNING_RATE:-1e-6}"
-KL_LOSS_COEF="${KL_LOSS_COEF:-0.3}"
+CRITIC_LEARNING_RATE="${CRITIC_LEARNING_RATE:-1e-5}"
+KL_LOSS_COEF="${KL_LOSS_COEF:-0.01}"
+GAE_GAMMA="${GAE_GAMMA:-1.0}"
+GAE_LAM="${GAE_LAM:-1.0}"
 LR_WARMUP_STYLE="${LR_WARMUP_STYLE:-constant}"
 LR_WARMUP_STEPS_RATIO="${LR_WARMUP_STEPS_RATIO:-0.0}"
 LR_MIN_RATIO="${LR_MIN_RATIO:-0.0}"
 LR_NUM_CYCLES="${LR_NUM_CYCLES:-0.5}"
-EPOCHS="${EPOCHS:-20}"
+EPOCHS="${EPOCHS:-50}"
 MAX_STEP="${MAX_STEP:-30}"
 SAVE_FREQ="${SAVE_FREQ:-5}"
 RESUME_MODE="${RESUME_MODE:-auto}"
@@ -51,15 +53,15 @@ CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.5}"
 CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
 CURRICULUM_SEED="${CURRICULUM_SEED:-0}"
 CURRICULUM_TERMINAL_RESET_RATIO="${CURRICULUM_TERMINAL_RESET_RATIO:-0.0}"
+CURRICULUM_TERMINAL_RESET_EVAL="${CURRICULUM_TERMINAL_RESET_EVAL:-False}"
 ENV_SEED="${ENV_SEED:-0}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 
-GIGPO_STEP_ADVANTAGE_W="${GIGPO_STEP_ADVANTAGE_W:-1.0}"
-GIGPO_MODE="${GIGPO_MODE:-mean_norm}"
-GIGPO_ENABLE_SIMILARITY="${GIGPO_ENABLE_SIMILARITY:-False}"
-GIGPO_SIMILARITY_THRESH="${GIGPO_SIMILARITY_THRESH:-0.95}"
-
-EXPERIMENT_TAG="${EXPERIMENT_TAG:-curr-n${MAX_CHEMICAL_N}}"
+ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-0.8}"
+ROLLOUT_TOP_P="${ROLLOUT_TOP_P:-0.9}"
+VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
+VAL_DO_SAMPLE="${VAL_DO_SAMPLE:-True}"
+EXPERIMENT_TAG="${EXPERIMENT_TAG:-gae-curr-n${MAX_CHEMICAL_N}}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-${EXPERIMENT_TAG}-envseed${ENV_SEED}-cseed${CURRICULUM_SEED}}"
 
 ray start --head \
@@ -85,7 +87,9 @@ cleanup() {
 trap cleanup EXIT
 
 python3 -m verl.trainer.main_ppo \
-    algorithm.adv_estimator=gigpo \
+    algorithm.adv_estimator=gae \
+    algorithm.gamma=$GAE_GAMMA \
+    algorithm.lam=$GAE_LAM \
     data.train_files=$HOME/data/verl-agent/text/train.parquet \
     data.val_files=$HOME/data/verl-agent/text/test.parquet \
     data.train_batch_size=$TRAIN_DATA_SIZE \
@@ -93,7 +97,7 @@ python3 -m verl.trainer.main_ppo \
     data.max_prompt_length=1024 \
     data.max_response_length=256 \
     data.filter_overlong_prompts=True \
-    data.truncation='error' \
+    data.truncation=error \
     data.return_raw_chat=True \
     actor_rollout_ref.model.path=$MODEL_PATH \
     actor_rollout_ref.actor.optim.lr=$LEARNING_RATE \
@@ -108,41 +112,38 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.kl_loss_coef=$KL_LOSS_COEF \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$NUM_GPUS_PER_NODE \
     actor_rollout_ref.rollout.name=$ENGINE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.n=1 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
-    actor_rollout_ref.rollout.temperature=0.7 \
-    actor_rollout_ref.rollout.top_p=0.9 \
-    actor_rollout_ref.actor.clip_ratio_low=0.2 \
-    actor_rollout_ref.actor.clip_ratio_high=0.25 \
+    actor_rollout_ref.rollout.temperature=$ROLLOUT_TEMPERATURE \
+    actor_rollout_ref.rollout.top_p=$ROLLOUT_TOP_P \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
-    actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
-    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+    actor_rollout_ref.rollout.val_kwargs.temperature=$VAL_TEMPERATURE \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=$VAL_DO_SAMPLE \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
     actor_rollout_ref.actor.invalid_action_penalty_coef=0.1 \
+    actor_rollout_ref.actor.clip_ratio_low=0.2 \
+    actor_rollout_ref.actor.clip_ratio_high=0.2 \
+    actor_rollout_ref.actor.entropy_coeff=0.001 \
+    critic.optim.lr=$CRITIC_LEARNING_RATE \
     critic.model.use_remove_padding=True \
     critic.model.path=$MODEL_PATH \
     critic.model.enable_gradient_checkpointing=True \
     critic.ppo_micro_batch_size_per_gpu=1 \
-    critic.model.fsdp_config.param_offload=True \
+    critic.model.fsdp_config.param_offload=False \
     critic.model.fsdp_config.optimizer_offload=False \
     algorithm.use_kl_in_reward=False \
-    algorithm.gamma=0.99 \
-    algorithm.gigpo.step_advantage_w=$GIGPO_STEP_ADVANTAGE_W \
-    algorithm.gigpo.mode=$GIGPO_MODE \
-    algorithm.gigpo.enable_similarity=$GIGPO_ENABLE_SIMILARITY \
-    algorithm.gigpo.similarity_thresh=$GIGPO_SIMILARITY_THRESH \
     env.env_name=discoveryworld \
     env.seed=$ENV_SEED \
     env.max_steps=$MAX_STEP \
-    env.rollout.n=$GROUP_SIZE \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.env_variant=${DISCOVERYWORLD_ENV_VARIANT} \
@@ -153,6 +154,7 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.curriculum_mix_ratios="${CURRICULUM_MIX_RATIOS}" \
     +env.discoveryworld.curriculum_seed=${CURRICULUM_SEED} \
     +env.discoveryworld.curriculum_terminal_reset_ratio=${CURRICULUM_TERMINAL_RESET_RATIO} \
+    +env.discoveryworld.curriculum_terminal_reset_eval=${CURRICULUM_TERMINAL_RESET_EVAL} \
     env.resources_per_worker.num_cpus=$NUM_CPUS_PER_ENV_WORKER \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \

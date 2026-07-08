@@ -35,6 +35,23 @@ def coerce_max_chemical_n(env_kwargs: Dict[str, Any], default: int = 2) -> int:
     )
 
 
+def coerce_bool(value: Any, default: bool = False) -> bool:
+    """Parse bool-like config values without treating "False" as true."""
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off", ""}:
+            return False
+    return bool(value)
+
+
 def remove_legacy_chemical_keys(env_kwargs: Dict[str, Any]) -> None:
     """Drop legacy chemical amount aliases after canonicalization."""
     env_kwargs.pop("max_chemical_n", None)
@@ -56,6 +73,7 @@ class DiscoveryWorkerConfig:
     curriculum_mix_ratios: Tuple[float, float, float] = (0.7, 0.2, 0.1)
     curriculum_seed: Optional[int] = None
     is_train: bool = True
+    env_variant: str = "original"
 
     @classmethod
     def from_env_kwargs(
@@ -75,13 +93,14 @@ class DiscoveryWorkerConfig:
             scenario_name=kwargs.pop("scenario_name", None),
             difficulty=kwargs.pop("difficulty", None),
             max_steps=int(kwargs.pop("max_steps", 50)),
-            save_frames=bool(kwargs.pop("save_frames", False)),
+            save_frames=coerce_bool(kwargs.pop("save_frames", False)),
             frames_dir=kwargs.pop("frames_dir", None),
             max_chemical_n=max_chemical_n,
             default_reset_kwargs=default_reset_kwargs,
-            curriculum_enabled=bool(kwargs.pop("curriculum_enabled", False)),
+            curriculum_enabled=coerce_bool(kwargs.pop("curriculum_enabled", False)),
             curriculum_train_fraction=float(kwargs.pop("curriculum_train_fraction", 0.7)),
             curriculum_mix_ratios=tuple(kwargs.pop("curriculum_mix_ratios", (0.7, 0.2, 0.1))),
             curriculum_seed=kwargs.pop("curriculum_seed", seed),
-            is_train=bool(kwargs.pop("is_train", True)),
+            is_train=coerce_bool(kwargs.pop("is_train", True), default=True),
+            env_variant=str(kwargs.pop("env_variant", "original")),  # original, pickupjar, derustmoderate
         )
