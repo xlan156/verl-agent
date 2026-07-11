@@ -259,7 +259,8 @@ class TrajectoryCollector:
 
         success_rate = {}
         for key, value in success.items():
-            success_rate[key] = np.mean(value)
+            if key != "eval_seed":
+                success_rate[key] = np.mean(value)
         
         effective_batch = []
         for bs in range(batch_size):
@@ -276,6 +277,10 @@ class TrajectoryCollector:
                     # success_rate
                     for key, value in success_rate.items():
                         data[key] = value
+                    if "success_rate" in success:
+                        # Binary outcome for this trajectory. Keep "success_rate"
+                        # reserved for aggregate metrics consumed by metric_utils.
+                        data["episode_success"] = success["success_rate"][bs]
 
                     effective_batch.append(data)
             
@@ -406,6 +411,7 @@ class TrajectoryCollector:
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
                         "action_status": str(info_i.get("action_status", "")),
+                        "post_key_rust_status": str(info_i.get("key_rust_status", "")),
                     }
                     llm_step_rows.append(row)
 
@@ -609,6 +615,8 @@ class TrajectoryCollector:
                         "is_action_valid",
                         "teacher_skill",
                         "action_status",
+                        "post_key_rust_status",
+                        "post_won",
                     ]
                     table = wandb.Table(columns=columns)
                     for r in llm_step_rows:
@@ -624,6 +632,8 @@ class TrajectoryCollector:
                             r.get("is_action_valid"),
                             r.get("teacher_skill"),
                             r.get("action_status"),
+                            r.get("post_key_rust_status"),
+                            r.get("post_won"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))
             except Exception:

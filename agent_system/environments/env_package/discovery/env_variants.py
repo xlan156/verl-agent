@@ -4,7 +4,11 @@ from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-from agent_system.environments.env_package.discovery.utils import RUST_LABEL_TO_LEVEL, extract_detailed_status
+from agent_system.environments.env_package.discovery.utils import (
+    RUST_LABEL_TO_LEVEL,
+    extract_detailed_status,
+    format_rust_level,
+)
 
 
 class CCEnvPickJar(DiscoveryWorldEnv):
@@ -40,6 +44,8 @@ class CCEnvDerustToModerate(DiscoveryWorldEnv):
 
     def _is_task_complete(self, info: Optional[Dict[str, Any]] = None) -> bool:
         info = info or {}
-        rust_status = str(info.get("key_rust_status") or "").strip().lower()
+        rust_status = format_rust_level(info.get("key_rust_status"))
+        if rust_status == "unknown":
+            rust_status = format_rust_level(info.get("key_rust_level"))
         rust_level = RUST_LABEL_TO_LEVEL.get(rust_status)
         return rust_level is not None and rust_level <= RUST_LABEL_TO_LEVEL["moderately rusted"]

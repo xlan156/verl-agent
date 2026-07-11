@@ -365,10 +365,14 @@ class DiscoveryWorldWorker:
             reset_kwargs.update(kwargs)
         else:
             reset_kwargs["curriculum_state"] = kwargs
-        return self._env.reset(kwargs=reset_kwargs)
+        obs, info = self._env.reset(kwargs=reset_kwargs)
+        info["seed"] = self._seed
+        return obs, info
 
     def step(self, action: Any, format_score: float = 0.0) -> Tuple[str, float, bool, Dict[str, Any]]:
-        return self._env.step(action, format_score=format_score)
+        obs, reward, done, info = self._env.step(action, format_score=format_score)
+        info["seed"] = self._seed
+        return obs, reward, done, info
 
     def close(self) -> None:
         self._env.close()
@@ -439,6 +443,7 @@ class DiscoveryWorldVectorEnv:
             min_chemicals=1,
             train_fraction=self._target_train_fraction,
         ) if not self._curriculum_enabled else None
+        self._eval_seed_pool = env_kwargs.get("eval_seed_pool")
         self._curriculum_stage_pools = build_stage_pools(
             max_chemical_n=self._curriculum_stage,
             num_chemicals=4,
@@ -497,6 +502,8 @@ class DiscoveryWorldVectorEnv:
                 split_seed_list = list(
                     seed_pools.get(goal_stage, {}).get(selected_split, []),
                 )
+            if not self.is_train and self._eval_seed_pool is not None:
+                split_seed_list = [int(value) for value in self._eval_seed_pool]
             if not split_seed_list:
                 split_seed_list = [int(seed)]
 

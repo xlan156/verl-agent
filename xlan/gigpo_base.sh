@@ -37,10 +37,11 @@ KL_LOSS_COEF="${KL_LOSS_COEF:-0.3}"
 LR_WARMUP_STYLE="${LR_WARMUP_STYLE:-constant}"
 LR_WARMUP_STEPS_RATIO="${LR_WARMUP_STEPS_RATIO:-0.0}"
 LR_MIN_RATIO="${LR_MIN_RATIO:-0.0}"
-LR_NUM_CYCLES="${LR_NUM_CYCLES:-0.5}"
+ENTROPY_COEFF="${ENTROPY_COEFF:-0.001}"
 EPOCHS="${EPOCHS:-20}"
 MAX_STEP="${MAX_STEP:-30}"
 SAVE_FREQ="${SAVE_FREQ:-5}"
+SAVE_BEST_VAL_SUCCESS="${SAVE_BEST_VAL_SUCCESS:-False}"
 RESUME_MODE="${RESUME_MODE:-auto}"
 RESUME_FROM_PATH="${RESUME_FROM_PATH:-null}"
 
@@ -53,6 +54,8 @@ CURRICULUM_SEED="${CURRICULUM_SEED:-0}"
 CURRICULUM_TERMINAL_RESET_RATIO="${CURRICULUM_TERMINAL_RESET_RATIO:-0.0}"
 ENV_SEED="${ENV_SEED:-0}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
+DISCOVERYWORLD_ANCHOR_MODE="${DISCOVERYWORLD_ANCHOR_MODE:-belief_summary}"
+DISCOVERYWORLD_BELIEF_HISTORY_LENGTH="${DISCOVERYWORLD_BELIEF_HISTORY_LENGTH:-16}"
 
 GIGPO_STEP_ADVANTAGE_W="${GIGPO_STEP_ADVANTAGE_W:-1.0}"
 GIGPO_MODE="${GIGPO_MODE:-mean_norm}"
@@ -100,13 +103,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.warmup_style=$LR_WARMUP_STYLE \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=$LR_WARMUP_STEPS_RATIO \
     actor_rollout_ref.actor.optim.min_lr_ratio=$LR_MIN_RATIO \
-    actor_rollout_ref.actor.optim.num_cycles=$LR_NUM_CYCLES \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=$MINI_BATCH_SIZE \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=$KL_LOSS_COEF \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.actor.entropy_coeff=$ENTROPY_COEFF \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -118,7 +121,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.temperature=0.7 \
     actor_rollout_ref.rollout.top_p=0.9 \
     actor_rollout_ref.actor.clip_ratio_low=0.2 \
-    actor_rollout_ref.actor.clip_ratio_high=0.25 \
+    actor_rollout_ref.actor.clip_ratio_high=0.2 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
@@ -146,6 +149,8 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.scenario_name="${SCENARIO_NAME}" \
     +env.discoveryworld.difficulty="${DIFFICULTY}" \
     +env.discoveryworld.env_variant=${DISCOVERYWORLD_ENV_VARIANT} \
+    +env.discoveryworld.anchor_mode=${DISCOVERYWORLD_ANCHOR_MODE} \
+    +env.discoveryworld.belief_history_length=${DISCOVERYWORLD_BELIEF_HISTORY_LENGTH} \
     +env.discoveryworld.save_frames=False \
     +env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N} \
     +env.discoveryworld.curriculum_enabled=${CURRICULUM_ENABLED} \
@@ -162,6 +167,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=$SAVE_FREQ \
+    trainer.save_best_val_success=$SAVE_BEST_VAL_SUCCESS \
     trainer.test_freq=5 \
     trainer.total_epochs=$EPOCHS \
     trainer.resume_mode=$RESUME_MODE \

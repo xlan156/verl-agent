@@ -20,6 +20,7 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import json
 import os
+import shutil
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
@@ -692,6 +693,7 @@ class RayPPOTrainer:
         tool_calling_list = []
         traj_uid_list = []
         success_rate_dict = {}
+        success_by_seed_dict = defaultdict(list)
 
         # Lists to collect samples for the table
         sample_inputs = []
@@ -774,6 +776,13 @@ class RayPPOTrainer:
             tool_calling_list.append(test_output_gen_batch.non_tensor_batch['tool_callings'])
             traj_uid_list.append(test_output_gen_batch.non_tensor_batch['traj_uid'])
             # success rate
+            if "episode_success" in test_batch.non_tensor_batch and "eval_seed" in test_batch.non_tensor_batch:
+                _, episode_indices = np.unique(test_batch.non_tensor_batch["traj_uid"], return_index=True)
+                for episode_idx in episode_indices:
+                    seed = int(test_batch.non_tensor_batch["eval_seed"][episode_idx])
+                    success_by_seed_dict[seed].append(
+                        float(test_batch.non_tensor_batch["episode_success"][episode_idx])
+                    )
             for k in test_batch.non_tensor_batch.keys():
                 if 'success_rate' in k:
                     if k not in success_rate_dict:
@@ -823,6 +832,9 @@ class RayPPOTrainer:
 
         for k, v in success_rate.items():
             metric_dict[f'val/{k}'] = v
+
+        for seed, values in sorted(success_by_seed_dict.items()):
+            metric_dict[f"val/success_rate_by_seed/{seed}"] = float(np.mean(values))
 
         return metric_dict
 
@@ -909,14 +921,15 @@ class RayPPOTrainer:
                 worker_group=self.actor_rollout_wg,
             )
 
-    def _save_checkpoint(self):
+    def _save_checkpoint(self, checkpoint_name=None, update_latest=True):
         # path: given_path + `/global_step_{global_steps}` + `/actor`
-        local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")
+        checkpoint_name = checkpoint_name or f"global_step_{self.global_steps}"
+        local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, checkpoint_name)
 
         print(f"local_global_step_folder: {local_global_step_folder}")
         actor_local_path = os.path.join(local_global_step_folder, "actor")
 
-        actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "actor")
+        actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, checkpoint_name, "actor")
 
         remove_previous_ckpt_in_save = self.config.trainer.get("remove_previous_ckpt_in_save", False)
         if remove_previous_ckpt_in_save:
@@ -928,7 +941,7 @@ class RayPPOTrainer:
 
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, "critic")
-            critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, f"global_step_{self.global_steps}", "critic")
+            critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(self.config.trainer.default_hdfs_dir, checkpoint_name, "critic")
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep)
 
         # save dataloader
@@ -937,9 +950,53 @@ class RayPPOTrainer:
         torch.save(dataloader_state_dict, dataloader_local_path)
 
         # latest checkpointed iteration tracker (for atomic usage)
-        local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
-        with open(local_latest_checkpointed_iteration, "w") as f:
-            f.write(str(self.global_steps))
+        if update_latest:
+            local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
+            with open(local_latest_checkpointed_iteration, "w") as f:
+                f.write(str(self.global_steps))
+
+    def _maybe_save_best_val_success(self, val_metrics):
+        """Overwrite one checkpoint when the configured validation success metric improves."""
+        if not self.config.trainer.get("save_best_val_success", False):
+            return False
+
+        metric_name = self.config.trainer.get("best_val_success_metric", "val/success_rate")
+        if metric_name not in val_metrics:
+            available = sorted(k for k in val_metrics if k.startswith("val/") and "success_rate" in k)
+            raise KeyError(
+                f"Best-checkpoint metric {metric_name!r} was not produced by validation. "
+                f"Available success metrics: {available}"
+            )
+
+        current = float(val_metrics[metric_name])
+        if current <= self.best_val_success:
+            return False
+
+        previous = self.best_val_success
+        checkpoint_name = "best_val_success"
+        checkpoint_path = os.path.join(self.config.trainer.default_local_dir, checkpoint_name)
+        # The fixed directory name prevents best checkpoints from accumulating.
+        if os.path.exists(checkpoint_path):
+            shutil.rmtree(checkpoint_path)
+        self._save_checkpoint(checkpoint_name=checkpoint_name, update_latest=False)
+        self.best_val_success = current
+        metadata_path = os.path.join(checkpoint_path, "best_val_success.json")
+        with open(metadata_path, "w") as f:
+            json.dump({"metric": metric_name, "value": current, "global_step": self.global_steps}, f, indent=2)
+        print(f"Best validation success improved from {previous} to {current}; saved {checkpoint_path}")
+        return True
+
+    def _load_best_val_success(self):
+        """Restore the best score so a resumed run cannot replace it with a worse model."""
+        metadata_path = os.path.join(
+            self.config.trainer.default_local_dir, "best_val_success", "best_val_success.json"
+        )
+        if not os.path.exists(metadata_path):
+            return
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        self.best_val_success = float(metadata["value"])
+        print(f"Restored best validation success {self.best_val_success} from {metadata_path}")
 
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
@@ -963,14 +1020,24 @@ class RayPPOTrainer:
         else:
             if self.config.trainer.resume_mode == "resume_path":
                 assert isinstance(self.config.trainer.resume_from_path, str), "resume ckpt must be str type"
-                assert "global_step_" in self.config.trainer.resume_from_path, "resume ckpt must specify the global_steps"
                 global_step_folder = self.config.trainer.resume_from_path
                 if not os.path.isabs(global_step_folder):
                     working_dir = os.getcwd()
                     global_step_folder = os.path.join(working_dir, global_step_folder)
         print(f"Load from checkpoint folder: {global_step_folder}")
         # set global step
-        self.global_steps = int(global_step_folder.split("global_step_")[-1])
+        checkpoint_basename = os.path.basename(os.path.normpath(global_step_folder))
+        if checkpoint_basename.startswith("global_step_"):
+            self.global_steps = int(checkpoint_basename.removeprefix("global_step_"))
+        else:
+            metadata_path = os.path.join(global_step_folder, "best_val_success.json")
+            if not os.path.exists(metadata_path):
+                raise ValueError(
+                    "A non-global_step checkpoint must contain best_val_success.json: "
+                    f"{global_step_folder}"
+                )
+            with open(metadata_path) as f:
+                self.global_steps = int(json.load(f)["global_step"])
 
         print(f"Setting global step to {self.global_steps}")
         print(f"Resuming from {global_step_folder}")
@@ -1024,9 +1091,12 @@ class RayPPOTrainer:
         )
 
         self.global_steps = 0
+        self.best_val_success = float("-inf")
 
         # load checkpoint before doing anything
         self._load_checkpoint()
+        if self.config.trainer.get("save_best_val_success", False):
+            self._load_best_val_success()
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
@@ -1035,8 +1105,9 @@ class RayPPOTrainer:
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
+            self._maybe_save_best_val_success(val_metrics)
             if self.config.trainer.get("val_only", False):
-                return
+                return val_metrics
 
         # add tqdm
         progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
@@ -1278,6 +1349,7 @@ class RayPPOTrainer:
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                         with _timer("testing", timing_raw):
                             val_metrics: dict = self._validate()
+                            self._maybe_save_best_val_success(val_metrics)
                             if is_last_step:
                                 last_val_metrics = val_metrics
                         metrics.update(val_metrics)

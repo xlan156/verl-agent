@@ -660,7 +660,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.last_infos = infos
 
         full_text_obs = self.build_text_obs(text_obs, infos, init=True)
-        return {"text": full_text_obs, "image": None, "anchor": text_obs}, infos
+        anchor_obs = self.build_anchor_obs(text_obs, infos)
+        return {"text": full_text_obs, "image": None, "anchor": anchor_obs}, infos
 
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
@@ -685,6 +686,10 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.memory.store({
             "text_obs": self.pre_text_obs,
             "action": history_actions,
+            "pre_chemical_dict": [info.get("chemical_dict") for info in self.last_infos],
+            "post_chemical_dict": [info.get("chemical_dict") for info in infos],
+            "pre_rust_level": [info.get("key_rust_level") for info in self.last_infos],
+            "pre_rust_status": [info.get("key_rust_status") for info in self.last_infos],
             "rust_level": [info.get("key_rust_level") for info in infos],
             "rust_status": [info.get("key_rust_status") for info in infos],
         })
@@ -703,11 +708,127 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             info["response_format_valid"] = bool(valids[i])
             info["response_format_score"] = float(format_scores[i])
 
-        next_observations = {"text": full_text_obs, "image": None, "anchor": text_obs}
+        anchor_obs = self.build_anchor_obs(text_obs, infos)
+        next_observations = {"text": full_text_obs, "image": None, "anchor": anchor_obs}
         rewards = to_numpy(rewards)
         dones = to_numpy(dones)
 
         return next_observations, rewards, dones, infos
+
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        """Keep the environment seed alongside each terminal success for evaluation."""
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            if total_batch_list[batch_idx][i]["active_masks"]:
+                info = total_infos[batch_idx][i]
+                success["success_rate"].append(float(info["won"]))
+                success["eval_seed"].append(int(info["seed"]))
+                return
+
+    def _chemical_counts(self, chemical_dict: Dict[str, Any]) -> Dict[str, int]:
+        chemical_dict = chemical_dict or {}
+        return {chemical: int(chemical_dict.get(chemical, 0) or 0) for chemical in ("A", "B", "C", "D")}
+
+    def _chemical_counts_text(self, chemical_dict: Dict[str, Any]) -> str:
+        counts = self._chemical_counts(chemical_dict)
+        return ",".join(f"{chemical}={counts[chemical]}" for chemical in ("A", "B", "C", "D"))
+
+    def _rust_change_text(self, previous_level: Any, current_level: Any) -> str:
+        from agent_system.environments.env_package.discovery.utils import RUST_LABEL_TO_LEVEL, format_rust_level
+
+        previous_label = format_rust_level(previous_level)
+        current_label = format_rust_level(current_level)
+        previous_value = RUST_LABEL_TO_LEVEL.get(previous_label)
+        current_value = RUST_LABEL_TO_LEVEL.get(current_label)
+        if previous_value is None or current_value is None:
+            return f"{previous_label} -> {current_label}"
+        if current_value < previous_value:
+            change = "improved"
+        elif current_value > previous_value:
+            change = "worsened"
+        else:
+            change = "no change"
+        return f"{previous_label} -> {current_label} ({change})"
+
+    def _is_chemical_action(self, action: Any) -> bool:
+        action_text = str(action or "")
+        return (
+            action_text.startswith("use_dispenser_")
+            or action_text.startswith("remove_chemical_")
+            or action_text == "wash_jar"
+        )
+
+    def build_chemical_belief(self, item: int, info: Dict[str, Any], max_records: int = 16) -> str:
+        records = self.memory[item] if item < len(self.memory) else []
+        current_combo = self._chemical_counts_text(info.get("chemical_dict"))
+        current_rust = str(info.get("key_rust_status") or "unknown").strip().lower()
+
+        combo_results: Dict[Tuple[int, int, int, int], Dict[str, Any]] = {}
+        for record in records:
+            action = record.get("action")
+            pre_combo = self._chemical_counts(record.get("pre_chemical_dict"))
+            post_combo = self._chemical_counts(record.get("post_chemical_dict"))
+            combo_changed = pre_combo != post_combo
+            rust_changed = self._rust_change_text(record.get("pre_rust_level"), record.get("rust_level"))
+            if not self._is_chemical_action(action) and not combo_changed:
+                continue
+            if not combo_changed and ("no change" in rust_changed or rust_changed == "unknown -> unknown"):
+                continue
+
+            combo_tuple = tuple(post_combo[chemical] for chemical in ("A", "B", "C", "D"))
+            entry = {
+                "combo": self._chemical_counts_text(post_combo),
+                "action": action,
+                "transition": rust_changed,
+                "step": len(combo_results) + 1,
+            }
+            combo_results[combo_tuple] = entry
+
+        lines = [
+            f"Current combination vector: {current_combo}",
+            f"Current rust status: {current_rust}",
+        ]
+        if not combo_results:
+            lines.append("Observed combination effects: none yet")
+            return "\n".join(lines)
+
+        lines.append("Observed combination effects:")
+        for _, entry in sorted(combo_results.items())[-max_records:]:
+            lines.append(
+                f"- {entry['combo']} after {entry['action']}: rust {entry['transition']}"
+            )
+        return "\n".join(lines)
+
+    def build_anchor_obs(self, text_obs: List[str], infos: List[Dict[str, Any]]) -> List[str]:
+        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
+        anchor_mode = str(getattr(discovery_cfg, "anchor_mode", "belief_summary")).strip().lower()
+        max_records = int(getattr(discovery_cfg, "belief_history_length", 16))
+
+        anchors: List[str] = []
+        for i, obs in enumerate(text_obs):
+            if anchor_mode in {"raw", "raw_obs", "text_obs"}:
+                anchors.append(obs)
+                continue
+
+            info = infos[i]
+            state_summary = {
+                "state_obs": obs,
+                "chemical_dict": self._chemical_counts(info.get("chemical_dict")),
+                "key_rust_status": str(info.get("key_rust_status") or "unknown").strip().lower(),
+                "has_key": bool(info.get("has_key")),
+                "has_jar": bool(info.get("has_jar")),
+                "is_key_in_jar": bool(info.get("is_key_in_jar")),
+                "used_dispensers": {
+                    key: bool(value)
+                    for key, value in sorted((info.get("used_dispensers") or {}).items())
+                },
+            }
+            if anchor_mode in {"state", "state_summary"}:
+                anchors.append(json.dumps(state_summary, sort_keys=True))
+                continue
+
+            state_summary["chemical_belief"] = self.build_chemical_belief(i, info, max_records=max_records)
+            anchors.append(json.dumps(state_summary, sort_keys=True))
+        return anchors
 
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
         from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
@@ -729,6 +850,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
             chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
             key_state = format_key_status(infos[i].get("key_rust_status"))
+            chemical_belief = self.build_chemical_belief(i, infos[i], max_records=int(getattr(discovery_cfg, "belief_history_length", 16)))
             valid_skill_names = get_valid_discoveryworld_skills(infos[i], max_chemical_n=max_chemical_n)
             infos[i]["valid_skills"] = list(valid_skill_names)
             valid_skills = "\n".join(valid_skill_names)
@@ -740,6 +862,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                     key_state=key_state,
                     state_obs=state_obs,
                     step_info=step_info,
+                    chemical_belief=chemical_belief,
                     valid_skills=valid_skills,
                 )
             else:
@@ -770,6 +893,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                     state_obs=state_obs,
                     step_info=step_info,
                     memory_actions=memory_actions,
+                    chemical_belief=chemical_belief,
                     valid_skills=valid_skills,
                 )
             postprocess_text_obs.append(obs)
@@ -906,6 +1030,7 @@ def make_envs(config):
             getattr(discovery_cfg, "curriculum_terminal_reset_eval", False),
         ))
         env_variant = getattr(discovery_cfg, "env_variant", "original")
+        eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)
 
         env_kwargs = {
             "scenario_name": scenario_name,
@@ -923,6 +1048,7 @@ def make_envs(config):
             "curriculum_seed": curriculum_seed,
             "curriculum_terminal_reset_ratio": curriculum_terminal_reset_ratio,
             "curriculum_terminal_reset_eval": curriculum_terminal_reset_eval,
+            "eval_seed_pool": eval_seed_pool,
         }
         if save_frames is not None:
             env_kwargs["save_frames"] = coerce_bool(save_frames)

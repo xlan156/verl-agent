@@ -39,6 +39,7 @@ KL_LOSS_COEF="${KL_LOSS_COEF:-0.03}"
 EPOCHS="${EPOCHS:-20}"
 MAX_STEP="${MAX_STEP:-20}"
 SAVE_FREQ="${SAVE_FREQ:-5}"
+SAVE_BEST_VAL_SUCCESS="${SAVE_BEST_VAL_SUCCESS:-False}"
 RESUME_MODE="${RESUME_MODE:-auto}"
 RESUME_FROM_PATH="${RESUME_FROM_PATH:-null}"
 
@@ -137,6 +138,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.log_llm_steps=True \
     trainer.save_freq=$SAVE_FREQ \
+    trainer.save_best_val_success=$SAVE_BEST_VAL_SUCCESS \
     trainer.test_freq=5 \
     trainer.total_epochs=$EPOCHS \
     trainer.resume_mode=$RESUME_MODE \

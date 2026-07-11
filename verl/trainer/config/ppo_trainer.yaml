@@ -269,6 +269,9 @@ trainer:
   nnodes: 1
   n_gpus_per_node: 8
   save_freq: -1
+  # Save one fixed-name checkpoint whenever validation success strictly improves.
+  save_best_val_success: False
+  best_val_success_metric: val/success_rate
   # auto: find the last ckpt to resume. If can't find, start from scratch
   resume_mode: auto # or disable or resume_path if resume_from_path is set
   resume_from_path: null

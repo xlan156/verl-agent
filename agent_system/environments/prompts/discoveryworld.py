@@ -16,6 +16,10 @@ def format_key_status(key_rust_status):
     return f"Rust level: {rust_status}\nReady to open: {ready_to_open}"
 
 
+def format_empty_chemical_belief():
+    return "No chemical experiment has been observed yet."
+
+
 DISCOVERYWORLD_TEMPLATE_NO_HIS = """
 [TASK]
 You need to find the rusted key, use a jar to apply chemicals to derust it, and then open the door.
@@ -29,6 +33,9 @@ When key is no rust, you can choose to open the door.
 {chemical_state}
 {key_state}
 {state_obs}
+
+[CHEMICAL MEMORY]
+{chemical_belief}
 
 [VALID SKILLS]
 {valid_skills}
@@ -60,6 +67,9 @@ When key is no rust, you can choose to open the door.
 
 [RECENT ACTIONS]
 {memory_actions}
+
+[CHEMICAL MEMORY]
+{chemical_belief}
 
 [VALID SKILLS]
 {valid_skills}

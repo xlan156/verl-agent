@@ -50,7 +50,7 @@ def run_ppo(config) -> None:
     #runner = TaskRunner.remote()
     #ray.get(runner.run.remote(config))
     runner = TaskRunner()
-    runner.run(config)
+    return runner.run(config)
 
 
 #@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
@@ -187,7 +187,7 @@ class TaskRunner:
             val_envs=val_envs,
         )
         trainer.init_workers()
-        trainer.fit()
+        return trainer.fit()
 
 
 def create_rl_dataset(data_paths, data_config, tokenizer, processor):
