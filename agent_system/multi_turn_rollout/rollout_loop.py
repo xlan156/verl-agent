@@ -281,6 +281,8 @@ class TrajectoryCollector:
                         # Binary outcome for this trajectory. Keep "success_rate"
                         # reserved for aggregate metrics consumed by metric_utils.
                         data["episode_success"] = success["success_rate"][bs]
+                    if "eval_seed" in success:
+                        data["eval_seed"] = success["eval_seed"][bs]
 
                     effective_batch.append(data)
             

@@ -42,10 +42,26 @@ def make_eval_parquet(path: Path, size: int) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Maximum --val-size with the default --target-train-fraction=0.8: "
+            "N=1: 1 (val seeds [3]); "
+            "N=2: 2 (val seeds [8, 9]); "
+            "N=3: 4 (val seeds [16, 17, 18, 19]); "
+            "N=4: 7 (val seeds [28, 29, 30, 31, 32, 33, 34]). "
+            "Changing --target-train-fraction changes these limits."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("checkpoint", type=Path, help="global_step_N or best_val_success checkpoint directory")
     parser.add_argument("--model-path", default="Qwen/Qwen2.5-0.5B-Instruct", help="Base HF model used to initialize the checkpoint architecture")
-    parser.add_argument("--val-size", type=int, default=2, help="Number of distinct seeds selected from the curriculum-disabled val pool")
+    parser.add_argument(
+        "--val-size",
+        type=int,
+        default=2,
+        help="Number of distinct seeds selected from the curriculum-disabled val pool; see limits below",
+    )
     parser.add_argument("--rollouts-per-seed", type=int, default=5)
     parser.add_argument("--max-chemical-n", type=int, default=2)
     parser.add_argument("--target-train-fraction", type=float, default=0.8)
@@ -76,6 +92,7 @@ def main() -> None:
     full_val_pool = pools[args.max_chemical_n]["val"]
     if args.val_size > len(full_val_pool):
         raise ValueError(f"val_size={args.val_size} exceeds the fixed val pool size {len(full_val_pool)}: {full_val_pool}")
+
     selected_seeds = full_val_pool[: args.val_size]
     total_episodes = len(selected_seeds) * args.rollouts_per_seed
 
@@ -90,14 +107,21 @@ def main() -> None:
             cfg.data.val_files = str(val_file)
             cfg.data.train_batch_size = total_episodes
             cfg.data.val_batch_size = total_episodes
-            cfg.data.max_prompt_length = 1024
+            cfg.data.max_prompt_length = 2048
             cfg.data.max_response_length = 256
             cfg.data.return_raw_chat = True
             cfg.actor_rollout_ref.model.path = args.model_path
             cfg.actor_rollout_ref.model.use_remove_padding = True
             cfg.actor_rollout_ref.actor.strategy = "fsdp"
             cfg.actor_rollout_ref.actor.use_kl_loss = False
+            # val_only never updates the actor or computes rollout log-probs,
+            # but RayPPOTrainer/worker initialization still validates these.
+            cfg.actor_rollout_ref.actor.ppo_mini_batch_size = args.num_gpus
+            cfg.actor_rollout_ref.actor.ppo_micro_batch_size = None
+            cfg.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu = 1
             cfg.actor_rollout_ref.rollout.name = "vllm"
+            cfg.actor_rollout_ref.rollout.log_prob_micro_batch_size = None
+            cfg.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu = 1
             cfg.actor_rollout_ref.rollout.tensor_model_parallel_size = args.num_gpus
             cfg.actor_rollout_ref.rollout.gpu_memory_utilization = 0.6
             cfg.actor_rollout_ref.rollout.enable_chunked_prefill = False
@@ -153,6 +177,21 @@ def main() -> None:
         "macro_success_rate_across_seeds": macro_rate,
         "per_seed_success_rate": per_seed,
         "overall_micro_success_rate_wilson_95_ci": [ci_low, ci_high],
+        "eval_parameters": {
+            "checkpoint": str(checkpoint),
+            "model_path": args.model_path,
+            "val_size": args.val_size,
+            "rollouts_per_seed": args.rollouts_per_seed,
+            "selected_val_seeds": selected_seeds,
+            "max_chemical_n": args.max_chemical_n,
+            "target_train_fraction": args.target_train_fraction,
+            "max_steps": args.max_steps,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "do_sample": True,
+            "policy_sampling_seed": args.seed,
+            "vllm_gpu_memory_utilization": 0.6,
+        },
     }
     print("\nPaper-style validation summary")
     print(json.dumps(summary, indent=2))

@@ -141,5 +141,6 @@ qwen_apikey.txt
 xlan-scripts/
 qwen_hf_model/
 
+xlan/
 xlan/curriculum_pool_summary.csv
 xlan/VENV安装.txt
