@@ -11,7 +11,6 @@
 set -euo pipefail
 
 export MAX_CHEMICAL_N=3
-export CURRICULUM_ENABLED=False
 export EPOCHS=100
 export MAX_STEP=20
 export TRAIN_DATA_SIZE=8

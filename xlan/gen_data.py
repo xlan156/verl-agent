@@ -7,9 +7,7 @@ import pandas as pd
 from tqdm import trange
 
 from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-from agent_system.environments.env_package.discovery.config import coerce_bool
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
-from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 from agent_system.environments.env_package.discovery.utils import format_rust_update
 from agent_system.environments.prompts.discoveryworld import (
@@ -18,10 +16,7 @@ from agent_system.environments.prompts.discoveryworld import (
     format_current_chemicals,
     format_key_status,
 )
-from agent_system.environments.env_package.discovery.seed import (
-    build_fixed_seed_pools_by_amount,
-    build_ordered_seed_pools_by_amount,
-)
+from agent_system.environments.env_package.discovery.seed import build_ordered_seed_pools_by_amount
 
 
 SFT_think = {
@@ -45,7 +40,6 @@ SFT_think = {
 
 def build_prompt(
     state_obs: str,
-    curriculum_state: Any,
     step_count: int,
     max_steps: int,
     action_history: List[Dict[str, Any]],
@@ -54,7 +48,6 @@ def build_prompt(
     key_rust_status: Any = None,
 ) -> str:
     step_info = f"Step: {step_count} / {max_steps}"
-    curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
     chemical_state = format_current_chemicals(chemical_dict, max_chemical_n)
     key_state = format_key_status(key_rust_status)
 
@@ -79,7 +72,6 @@ def build_prompt(
         memory_actions = "\n".join(memory_lines)
         return DISCOVERYWORLD_TEMPLATE.format(
             max_chemical_n=max_chemical_n,
-            curriculum_state=curriculum_state_text,
             chemical_state=chemical_state,
             key_state=key_state,
             state_obs=state_obs,
@@ -89,7 +81,6 @@ def build_prompt(
 
     return DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
         max_chemical_n=max_chemical_n,
-        curriculum_state=curriculum_state_text,
         chemical_state=chemical_state,
         key_state=key_state,
         state_obs=state_obs,
@@ -110,23 +101,16 @@ def create_env(seed: int, max_steps: int, **kwargs) -> DiscoveryWorldEnv:
 def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]:
     env = create_env(seed=seed, max_steps=max_steps, **kwargs)
     state_obs, info = env.reset()
-    curriculum_enabled = coerce_bool(kwargs.get("curriculum_enabled", False))
-    if not curriculum_enabled:
-        chemical_total = sum((info.get("chemical_dict") or {}).values())
-        starts_from_curriculum = (
-            info.get("curriculum_state") is not None
-            or chemical_total > 0
-            or bool(info.get("has_key"))
-            or bool(info.get("has_jar"))
-            or bool(info.get("is_key_in_jar"))
-            or info.get("key_rust_status") == "no rust"
-        )
-        if starts_from_curriculum:
-            env.close()
-            raise RuntimeError(
-                "curriculum is disabled but the episode did not start from scratch: "
-                f"seed={seed}, info={info}"
-            )
+    chemical_total = sum((info.get("chemical_dict") or {}).values())
+    if (
+        chemical_total > 0
+        or bool(info.get("has_key"))
+        or bool(info.get("has_jar"))
+        or bool(info.get("is_key_in_jar"))
+        or info.get("key_rust_status") == "no rust"
+    ):
+        env.close()
+        raise RuntimeError(f"episode did not start from scratch: seed={seed}, info={info}")
     teacher = RulebasedAgentSkill(env)
     skill_agent = CombinatorialChemistrySkill(env)
 
@@ -139,7 +123,6 @@ def rollout_episode(seed: int, max_steps: int, **kwargs) -> List[Dict[str, Any]]
         if teacher_skill:
             prompt = build_prompt(
                 state_obs=state_obs.replace("\\n", "\n"),
-                curriculum_state=info.get("curriculum_state"),
                 step_count=env._steps,
                 max_steps=env._max_steps,
                 action_history=action_history,
@@ -199,13 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=50, help="Max environment steps per episode.")
     parser.add_argument("--is-train", action="store_true", help="Generate training data (default: validation data).")
     parser.add_argument("--max-chemical-n", type=int, default=2, help="Total chemical amount.")
-    parser.add_argument("--curriculum-seed", type=int, default=0, help="Seed used to build the fixed curriculum pool (default: --seed).")
-    parser.add_argument("--curriculum-train-fraction", type=float, default=0.7, help="Train fraction for the fixed curriculum pool.")
-    parser.add_argument("--target-train-fraction", type=float, default=0.8, help="Train fraction for the ordered target pool when curriculum is disabled.")
-    curriculum_group = parser.add_mutually_exclusive_group()
-    curriculum_group.add_argument("--curriculum-enabled", dest="curriculum_enabled", action="store_true", help="Enable curriculum initial-state sampling.")
-    curriculum_group.add_argument("--no-curriculum", dest="curriculum_enabled", action="store_false", help="Disable curriculum and use the ordered target seed pool.")
-    parser.set_defaults(curriculum_enabled=False)
+    parser.add_argument("--target-train-fraction", type=float, default=0.8, help="Train fraction for the ordered target pool.")
     parser.add_argument("--output-file", type=str, default=None, help="Output parquet file path.")
     parser.add_argument("--append", action="store_true", help="Append to an existing parquet file instead of overwriting it.")
     return parser.parse_args()
@@ -214,22 +191,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     all_records: List[Dict[str, Any]] = []
-    curriculum_seed = args.seed if args.curriculum_seed is None else int(args.curriculum_seed)
-    if args.curriculum_enabled:
-        seed_pools = build_fixed_seed_pools_by_amount(
-            base_seed=curriculum_seed,
-            max_amount=args.max_chemical_n,
-            num_chemicals=4,
-            min_chemicals=1,
-            train_fraction=args.curriculum_train_fraction,
-        )
-    else:
-        seed_pools = build_ordered_seed_pools_by_amount(
-            max_amount=args.max_chemical_n,
-            num_chemicals=4,
-            min_chemicals=1,
-            train_fraction=args.target_train_fraction,
-        )
+    seed_pools = build_ordered_seed_pools_by_amount(
+        max_amount=args.max_chemical_n,
+        num_chemicals=4,
+        min_chemicals=1,
+        train_fraction=args.target_train_fraction,
+    )
     selected_split = "train" if args.is_train else "val"
     seeds_to_use = list(seed_pools.get(args.max_chemical_n, {}).get(selected_split, []))
     if not seeds_to_use:
@@ -250,9 +217,6 @@ def main() -> None:
             seed=episode_seed,
             max_steps=args.max_steps,
             max_chemical_n=args.max_chemical_n,
-            curriculum_enabled=args.curriculum_enabled,
-            curriculum_seed=curriculum_seed,
-            curriculum_train_fraction=args.curriculum_train_fraction,
             is_train=args.is_train,
         )
         for step_idx, record in enumerate(episode_records):
@@ -281,7 +245,6 @@ def main() -> None:
                         "step_idx": step_idx,
                         "seed": episode_seed,
                         "max_chemical_n": args.max_chemical_n,
-                        "curriculum_enabled": args.curriculum_enabled,
                         "teacher_response": response,
                     },
                 }

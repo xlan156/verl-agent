@@ -49,12 +49,6 @@ RESUME_FROM_PATH="${RESUME_FROM_PATH:-null}"
 
 DO_SFT="${DO_SFT:-False}"
 MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-2}"
-CURRICULUM_ENABLED="${CURRICULUM_ENABLED:-True}"
-CURRICULUM_TRAIN_FRACTION="${CURRICULUM_TRAIN_FRACTION:-0.5}"
-CURRICULUM_MIX_RATIOS="${CURRICULUM_MIX_RATIOS:-[0.7,0.2,0.1]}"
-CURRICULUM_SEED="${CURRICULUM_SEED:-0}"
-CURRICULUM_TERMINAL_RESET_RATIO="${CURRICULUM_TERMINAL_RESET_RATIO:-0.0}"
-CURRICULUM_TERMINAL_RESET_EVAL="${CURRICULUM_TERMINAL_RESET_EVAL:-False}"
 ENV_SEED="${ENV_SEED:-0}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 
@@ -63,7 +57,7 @@ ROLLOUT_TOP_P="${ROLLOUT_TOP_P:-0.9}"
 VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
 VAL_DO_SAMPLE="${VAL_DO_SAMPLE:-True}"
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-gae-curr-n${MAX_CHEMICAL_N}}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-${EXPERIMENT_TAG}-envseed${ENV_SEED}-cseed${CURRICULUM_SEED}}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-${EXPERIMENT_TAG}-envseed${ENV_SEED}}"
 
 ray start --head \
     --port=$port \
@@ -150,12 +144,6 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.env_variant=${DISCOVERYWORLD_ENV_VARIANT} \
     +env.discoveryworld.save_frames=False \
     +env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N} \
-    +env.discoveryworld.curriculum_enabled=${CURRICULUM_ENABLED} \
-    +env.discoveryworld.curriculum_train_fraction=${CURRICULUM_TRAIN_FRACTION} \
-    +env.discoveryworld.curriculum_mix_ratios="${CURRICULUM_MIX_RATIOS}" \
-    +env.discoveryworld.curriculum_seed=${CURRICULUM_SEED} \
-    +env.discoveryworld.curriculum_terminal_reset_ratio=${CURRICULUM_TERMINAL_RESET_RATIO} \
-    +env.discoveryworld.curriculum_terminal_reset_eval=${CURRICULUM_TERMINAL_RESET_EVAL} \
     env.resources_per_worker.num_cpus=$NUM_CPUS_PER_ENV_WORKER \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \

@@ -15,12 +15,9 @@ source ~/venvs/verlagentdis/bin/activate
 python -m xlan.gen_data \
     --episodes 30 \
     --max-steps 60 \
-    --max-chemical-n 1 \
-    --no-curriculum \
+    --max-chemical-n 1
 
 python -m xlan.gen_data \
     --episodes 30 \
     --max-steps 60 \
-    --max-chemical-n 2 \
-    --no-curriculum \
-
+    --max-chemical-n 2

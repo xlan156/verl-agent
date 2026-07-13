@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 
 def slugify(value: Optional[str]) -> str:
@@ -67,27 +67,16 @@ class DiscoveryWorkerConfig:
     save_frames: bool = False
     frames_dir: Optional[str] = None
     max_chemical_n: int = 2
-    default_reset_kwargs: Dict[str, Any] = field(default_factory=dict)
-    curriculum_enabled: bool = False
-    curriculum_train_fraction: float = 0.7
-    curriculum_mix_ratios: Tuple[float, float, float] = (0.7, 0.2, 0.1)
-    curriculum_seed: Optional[int] = None
-    is_train: bool = True
     env_variant: str = "original"
 
     @classmethod
     def from_env_kwargs(
         cls,
-        seed: int,
         env_kwargs: Optional[Dict[str, Any]],
     ) -> "DiscoveryWorkerConfig":
         kwargs = dict(env_kwargs or {})
         max_chemical_n = coerce_max_chemical_n(kwargs)
         remove_legacy_chemical_keys(kwargs)
-
-        default_reset_kwargs: Dict[str, Any] = {}
-        if "curriculum_state" in kwargs:
-            default_reset_kwargs["curriculum_state"] = kwargs.pop("curriculum_state")
 
         return cls(
             scenario_name=kwargs.pop("scenario_name", None),
@@ -96,11 +85,5 @@ class DiscoveryWorkerConfig:
             save_frames=coerce_bool(kwargs.pop("save_frames", False)),
             frames_dir=kwargs.pop("frames_dir", None),
             max_chemical_n=max_chemical_n,
-            default_reset_kwargs=default_reset_kwargs,
-            curriculum_enabled=coerce_bool(kwargs.pop("curriculum_enabled", False)),
-            curriculum_train_fraction=float(kwargs.pop("curriculum_train_fraction", 0.7)),
-            curriculum_mix_ratios=tuple(kwargs.pop("curriculum_mix_ratios", (0.7, 0.2, 0.1))),
-            curriculum_seed=kwargs.pop("curriculum_seed", seed),
-            is_train=coerce_bool(kwargs.pop("is_train", True), default=True),
             env_variant=str(kwargs.pop("env_variant", "original")),  # original, pickupjar, derustmoderate
         )

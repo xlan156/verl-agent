@@ -636,23 +636,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
-        reset_kwargs = kwargs
-        if reset_kwargs is None:
-            discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-            curriculum_cfg = getattr(discovery_cfg, "curriculum", None)
-            from agent_system.environments.env_package.discovery.config import coerce_bool
-
-            curriculum_enabled = coerce_bool(
-                getattr(curriculum_cfg, "enabled", getattr(discovery_cfg, "curriculum_enabled", False)),
-            )
-            reset_kwargs = getattr(discovery_cfg, "curriculum_state", None) if curriculum_enabled else None
-            if reset_kwargs is not None:
-                if isinstance(reset_kwargs, (list, tuple)) and reset_kwargs and isinstance(reset_kwargs[0], (list, tuple, dict)):
-                    reset_kwargs = list(reset_kwargs)
-                else:
-                    reset_kwargs = {"curriculum_state": reset_kwargs}
-
-        text_obs, infos = self.envs.reset(kwargs=reset_kwargs)
+        text_obs, infos = self.envs.reset(kwargs=kwargs)
 
         self.memory.reset(batch_size=len(text_obs))
         self.tasks = [info.get("task_description", "") for info in infos]
@@ -831,7 +815,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         return anchors
 
     def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
-        from agent_system.environments.env_package.discovery.curriculum import format_chemical_state
         from agent_system.environments.env_package.discovery.utils import (
             format_rust_update,
             get_valid_discoveryworld_skills,
@@ -846,8 +829,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             state_obs = text_obs[i]
             state_obs = state_obs.replace("\\n", "\n")
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
-            curriculum_state = infos[i].get("curriculum_state")
-            curriculum_state_text = format_chemical_state(curriculum_state) if curriculum_state is not None else "None"
             chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
             key_state = format_key_status(infos[i].get("key_rust_status"))
             chemical_belief = self.build_chemical_belief(i, infos[i], max_records=int(getattr(discovery_cfg, "belief_history_length", 16)))
@@ -857,7 +838,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             if init or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     max_chemical_n=max_chemical_n,
-                    curriculum_state=curriculum_state_text,
                     chemical_state=chemical_state,
                     key_state=key_state,
                     state_obs=state_obs,
@@ -887,7 +867,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 memory_actions = "\n".join(memory_lines)
                 obs = DISCOVERYWORLD_TEMPLATE.format(
                     max_chemical_n=max_chemical_n,
-                    curriculum_state=curriculum_state_text,
                     chemical_state=chemical_state,
                     key_state=key_state,
                     state_obs=state_obs,
@@ -1003,8 +982,6 @@ def make_envs(config):
     
     elif "discoveryworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.discovery import build_discoveryworld_envs, discoveryworld_projection
-        from agent_system.environments.env_package.discovery.config import coerce_bool
-
         # Optional nested config: env.discoveryworld.{scenario_name,difficulty}
         discovery_cfg = getattr(config.env, "discoveryworld", None)
         scenario_name = getattr(discovery_cfg, "scenario_name", "Combinatorial Chemistry")
@@ -1012,23 +989,7 @@ def make_envs(config):
         max_chemical_n = getattr(discovery_cfg, "max_chemical_n", getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)))
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
-        curriculum_cfg = getattr(discovery_cfg, "curriculum", None)
-        curriculum_enabled = coerce_bool(getattr(curriculum_cfg, "enabled", getattr(discovery_cfg, "curriculum_enabled", False)))
-        curriculum_stage = getattr(curriculum_cfg, "stage", getattr(discovery_cfg, "curriculum_stage", max_chemical_n))
-        curriculum_train_fraction = getattr(curriculum_cfg, "train_fraction", getattr(discovery_cfg, "curriculum_train_fraction", 0.7))
         target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
-        curriculum_mix_ratios = getattr(curriculum_cfg, "mix_ratios", getattr(discovery_cfg, "curriculum_mix_ratios", (0.7, 0.2, 0.1)))
-        curriculum_seed = getattr(curriculum_cfg, "seed", getattr(discovery_cfg, "curriculum_seed", config.env.seed))
-        curriculum_terminal_reset_ratio = getattr(
-            curriculum_cfg,
-            "terminal_reset_ratio",
-            getattr(discovery_cfg, "curriculum_terminal_reset_ratio", 0.0),
-        )
-        curriculum_terminal_reset_eval = coerce_bool(getattr(
-            curriculum_cfg,
-            "terminal_reset_eval",
-            getattr(discovery_cfg, "curriculum_terminal_reset_eval", False),
-        ))
         env_variant = getattr(discovery_cfg, "env_variant", "original")
         eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)
 
@@ -1040,17 +1001,11 @@ def make_envs(config):
             "train_size": config.data.train_batch_size,
             "val_size": config.data.val_batch_size,
             "max_chemical_n": max_chemical_n,
-            "curriculum_enabled": curriculum_enabled,
-            "curriculum_stage": curriculum_stage,
-            "curriculum_train_fraction": curriculum_train_fraction,
             "target_train_fraction": target_train_fraction,
-            "curriculum_mix_ratios": curriculum_mix_ratios,
-            "curriculum_seed": curriculum_seed,
-            "curriculum_terminal_reset_ratio": curriculum_terminal_reset_ratio,
-            "curriculum_terminal_reset_eval": curriculum_terminal_reset_eval,
             "eval_seed_pool": eval_seed_pool,
         }
         if save_frames is not None:
+            from agent_system.environments.env_package.discovery.config import coerce_bool
             env_kwargs["save_frames"] = coerce_bool(save_frames)
         if frames_dir:
             env_kwargs["frames_dir"] = frames_dir

@@ -12,13 +12,6 @@ import ray
 from agent_system.environments.env_package.discovery.discoveryworld.discoveryworld.DiscoveryWorldAPI import(
     DiscoveryWorldAPI,
 )
-from agent_system.environments.env_package.discovery.curriculum import (
-    build_stage_pools,
-    normalize_chemical_state,
-    plan_curriculum_goal_stages,
-    sample_solution_init_state,
-    solution_dict_to_state,
-)
 from agent_system.environments.env_package.discovery.config import (
     DiscoveryWorkerConfig,
     build_frames_dir,
@@ -26,10 +19,7 @@ from agent_system.environments.env_package.discovery.config import (
     coerce_max_chemical_n,
 )
 from agent_system.environments.env_package.discovery.rewards import DiscoveryWorldRewardMixin
-from agent_system.environments.env_package.discovery.seed import (
-    build_fixed_seed_pools_by_amount,
-    build_ordered_seed_pools_by_amount,
-)
+from agent_system.environments.env_package.discovery.seed import build_ordered_seed_pools_by_amount
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 from agent_system.environments.env_package.discovery.utils import (
@@ -41,6 +31,20 @@ from agent_system.environments.env_package.discovery.utils import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _solution_dict_to_state(solution: Dict[str, int]) -> Tuple[int, ...]:
+    aliases = {
+        "A": ("A", "Chemical A", "Substance A"),
+        "B": ("B", "Chemical B", "Substance B"),
+        "C": ("C", "Chemical C", "Substance C"),
+        "D": ("D", "Chemical D", "Substance D"),
+    }
+    normalized = {
+        canonical: int(next((solution[name] for name in names if name in solution), 0))
+        for canonical, names in aliases.items()
+    }
+    return tuple(normalized[name] for name in aliases)
 
 
 class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
@@ -55,11 +59,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         save_frames: bool = False,
         frames_dir: Optional[str] = None,
         max_chemical_n: Optional[int] = None,
-        curriculum_enabled: bool = False,
-        curriculum_train_fraction: float = 0.7,
-        curriculum_mix_ratios: Tuple[float, float, float] = (0.7, 0.2, 0.1),
-        curriculum_seed: Optional[int] = None,
-        is_train: bool = True,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -69,13 +68,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._save_frames = coerce_bool(save_frames)
         self._frames_dir = frames_dir
         self._max_chemical_n = int(max_chemical_n) if max_chemical_n is not None else 2
-        self._curriculum_enabled = coerce_bool(curriculum_enabled)
-        self._curriculum_train_fraction = float(curriculum_train_fraction)
-        self._curriculum_mix_ratios = tuple(curriculum_mix_ratios)
-        self._curriculum_seed = int(curriculum_seed) if curriculum_seed is not None else int(seed)
-        self._is_train = coerce_bool(is_train, default=True)
-        self._curriculum_state: Optional[Tuple[int, ...]] = None
-        self._curriculum_terminal_reset: bool = False
         self._chemical_solution_state: Optional[Tuple[int, ...]] = None
 
         self._api: Optional[DiscoveryWorldAPI] = None
@@ -121,7 +113,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             scoring_info = getattr(task, "scoringInfo", None) or {}
             chemical_solution = scoring_info.get("chemicalSolutionDict")
             if chemical_solution is not None:
-                return solution_dict_to_state(chemical_solution, num_chemicals=4)
+                return _solution_dict_to_state(chemical_solution)
         return None
 
     def init_reward_shaping(self):
@@ -163,8 +155,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             "last_action_result": self._last_action_result,
             "score_normalized": self._score_normalized(),
             "train_epoch": self.train_epoch,
-            "curriculum_state": self._curriculum_state,
-            "curriculum_terminal_reset": self._curriculum_terminal_reset,
             "chemical_solution_state": self._chemical_solution_state,
             "max_chemical_n": self._max_chemical_n,
         }
@@ -202,52 +192,9 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._steps = 0
         self._prev_score = 0.0
         self._last_action_result = None
-        self._curriculum_state = None
-        self._curriculum_terminal_reset = False
-        
+
         self.init_reward_shaping()
         self._chemical_solution_state = self._get_chemical_solution_state()
-
-        if kwargs is None:
-            reset_kwargs: Dict[str, Any] = {}
-        elif isinstance(kwargs, dict):
-            reset_kwargs = dict(kwargs)
-        else:
-            reset_kwargs = {"curriculum_state": kwargs}
-        curriculum_state = reset_kwargs.pop("curriculum_state", None)
-        if curriculum_state is None:
-            curriculum_state = reset_kwargs.pop("chemical_state", None)
-        curriculum_sample_seed = reset_kwargs.pop("curriculum_sample_seed", None)
-        curriculum_terminal_reset = coerce_bool(reset_kwargs.pop("curriculum_terminal_reset", False))
-
-        if curriculum_state is not None:
-            self._curriculum_state = normalize_chemical_state(curriculum_state)
-            saved_used_dispensers = dict(self.used_dispensers)
-            self._skill_runner.prepare_chemical_state(self._curriculum_state)
-            self.used_dispensers = saved_used_dispensers
-            self._last_action_result = None
-        elif self._curriculum_enabled and self._chemical_solution_state is not None:
-            self._chemical_solution_state = self._get_chemical_solution_state()
-            if curriculum_terminal_reset:
-                self._curriculum_state = self._chemical_solution_state
-                self._curriculum_terminal_reset = True
-            else:
-                sample_seed = (
-                    int(curriculum_sample_seed)
-                    if curriculum_sample_seed is not None
-                    else self._curriculum_seed + self._thread_id
-                )
-                self._curriculum_state = sample_solution_init_state(
-                    solution_state=self._chemical_solution_state,
-                    split="train" if self._is_train else "val",
-                    train_fraction=self._curriculum_train_fraction,
-                    seed=sample_seed,
-                    num_chemicals=4,
-                )
-            saved_used_dispensers = dict(self.used_dispensers)
-            self._skill_runner.prepare_chemical_state(self._curriculum_state)
-            self.used_dispensers = saved_used_dispensers
-            self._last_action_result = None
 
         text_obs, info = self._format_obs_and_info()
         ui = (info.get("raw_observation") or {}).get("ui", {})
@@ -337,8 +284,7 @@ class DiscoveryWorldWorker:
     ) -> None:
         self._seed = int(seed)
         self._thread_id = int(thread_id)
-        worker_config = DiscoveryWorkerConfig.from_env_kwargs(seed=seed, env_kwargs=env_kwargs)
-        self._default_reset_kwargs = worker_config.default_reset_kwargs
+        worker_config = DiscoveryWorkerConfig.from_env_kwargs(env_kwargs=env_kwargs)
         env_cls = _select_discoveryworld_env_cls(worker_config.env_variant)
 
         self._env = env_cls(
@@ -350,22 +296,10 @@ class DiscoveryWorldWorker:
             save_frames=worker_config.save_frames,
             frames_dir=worker_config.frames_dir,
             max_chemical_n=worker_config.max_chemical_n,
-            curriculum_enabled=worker_config.curriculum_enabled,
-            curriculum_train_fraction=worker_config.curriculum_train_fraction,
-            curriculum_mix_ratios=worker_config.curriculum_mix_ratios,
-            curriculum_seed=worker_config.curriculum_seed,
-            is_train=worker_config.is_train,
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
-        reset_kwargs = dict(self._default_reset_kwargs)
-        if kwargs is None:
-            pass
-        elif isinstance(kwargs, dict):
-            reset_kwargs.update(kwargs)
-        else:
-            reset_kwargs["curriculum_state"] = kwargs
-        obs, info = self._env.reset(kwargs=reset_kwargs)
+        obs, info = self._env.reset(kwargs=kwargs)
         info["seed"] = self._seed
         return obs, info
 
@@ -378,11 +312,9 @@ class DiscoveryWorldWorker:
         self._env.close()
 
     def debug_state(self) -> Dict[str, Any]:
-        curriculum_state = self._env._curriculum_state
         return {
             "seed": self._seed,
             "thread_id": self._thread_id,
-            "curriculum_state": curriculum_state,
             "chemical_solution_state": self._env._chemical_solution_state,
             "max_chemical_n": self._env._max_chemical_n,
             "scenario_name": self._env._scenario_name,
@@ -412,44 +344,16 @@ class DiscoveryWorldVectorEnv:
         self.is_train = coerce_bool(is_train, default=True)
 
         self._workers: List[Any] = []
-        self._curriculum_enabled = coerce_bool(env_kwargs.get("curriculum_enabled", False))
-        # Use a single curriculum stage value derived from explicit curriculum_stage
-        # or fall back to max_chemical_n (canonical external config key).
-        self._curriculum_stage = int(env_kwargs.get("curriculum_stage", coerce_max_chemical_n(env_kwargs)))
-        self._curriculum_train_fraction = float(env_kwargs.get("curriculum_train_fraction", 0.7))
+        self._max_chemical_n = coerce_max_chemical_n(env_kwargs)
         self._target_train_fraction = float(env_kwargs.get("target_train_fraction", 0.8))
-        self._curriculum_mix_ratios = tuple(env_kwargs.get("curriculum_mix_ratios", (0.7, 0.2, 0.1)))
-        self._curriculum_seed = int(env_kwargs.get("curriculum_seed", seed))
-        self._curriculum_terminal_reset_ratio = min(
-            max(float(env_kwargs.get("curriculum_terminal_reset_ratio", 0.0)), 0.0),
-            1.0,
-        )
-        self._curriculum_terminal_reset_eval = coerce_bool(
-            env_kwargs.get("curriculum_terminal_reset_eval", False),
-        )
         self._env_variant = str(env_kwargs.get("env_variant", "original")).strip().lower()
-        self._curriculum_split = "train" if self.is_train else "val"
-        self._reset_count = 0
-        self._curriculum_seed_pools = build_fixed_seed_pools_by_amount(
-            base_seed=self._curriculum_seed,
-            max_amount=self._curriculum_stage,
-            num_chemicals=4,
-            min_chemicals=1,
-            train_fraction=self._curriculum_train_fraction,
-        ) if self._curriculum_enabled else None
         self._target_seed_pools = build_ordered_seed_pools_by_amount(
-            max_amount=self._curriculum_stage,
+            max_amount=self._max_chemical_n,
             num_chemicals=4,
             min_chemicals=1,
             train_fraction=self._target_train_fraction,
-        ) if not self._curriculum_enabled else None
+        )
         self._eval_seed_pool = env_kwargs.get("eval_seed_pool")
-        self._curriculum_stage_pools = build_stage_pools(
-            max_chemical_n=self._curriculum_stage,
-            num_chemicals=4,
-            train_fraction=self._curriculum_train_fraction,
-            seed=self._curriculum_seed,
-        ) if self._curriculum_enabled else None
 
         if self.num_processes == 0:
             # No envs to build (e.g. no validation envs configured)
@@ -467,34 +371,15 @@ class DiscoveryWorldVectorEnv:
             env_kwargs["save_frames"] = (not self.is_train)
         if coerce_bool(env_kwargs.get("save_frames")) and "frames_dir" not in env_kwargs:
             env_kwargs["frames_dir"] = build_frames_dir(env_kwargs, seed, is_train)
-        env_kwargs["curriculum_enabled"] = self._curriculum_enabled
-        env_kwargs["curriculum_train_fraction"] = self._curriculum_train_fraction
         env_kwargs["target_train_fraction"] = self._target_train_fraction
-        env_kwargs["curriculum_mix_ratios"] = self._curriculum_mix_ratios
-        env_kwargs["curriculum_seed"] = self._curriculum_seed
-        env_kwargs["curriculum_terminal_reset_ratio"] = self._curriculum_terminal_reset_ratio
         env_kwargs["env_variant"] = self._env_variant
-        env_kwargs["is_train"] = self.is_train
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
         selected_split = "train" if self.is_train else "val"
-        if self._curriculum_enabled:
-            if self.is_train:
-                base_goal_stage_plan = plan_curriculum_goal_stages(
-                    stage=self._curriculum_stage,
-                    batch_size=self.env_num,
-                    mix_ratios=self._curriculum_mix_ratios,
-                    seed=self._curriculum_seed,
-                )
-            else:
-                base_goal_stage_plan = [self._curriculum_stage] * self.env_num
-            goal_stage_plan = [stage for stage in base_goal_stage_plan for _ in range(self.group_n)]
-        else:
-            configured_chemical_n = coerce_max_chemical_n(env_kwargs)
-            goal_stage_plan = [configured_chemical_n] * self.num_processes
+        goal_stage_plan = [self._max_chemical_n] * self.num_processes
 
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)
-        seed_pools = self._curriculum_seed_pools if self._curriculum_enabled else self._target_seed_pools
+        seed_pools = self._target_seed_pools
         for i in range(self.num_processes):
             goal_stage = int(goal_stage_plan[i])
             split_seed_list: List[int] = []
@@ -512,7 +397,6 @@ class DiscoveryWorldVectorEnv:
             worker_seed = int(split_seed_list[seed_idx])
             worker_env_kwargs = dict(env_kwargs)
             worker_env_kwargs["max_chemical_n"] = goal_stage
-            worker_env_kwargs["curriculum_goal_stage"] = goal_stage
             worker = env_worker.remote(seed=worker_seed, env_kwargs=worker_env_kwargs, thread_id=i)
             self._workers.append(worker)
 
@@ -524,19 +408,10 @@ class DiscoveryWorldVectorEnv:
         obs_list: List[str] = []
         info_list: List[Dict[str, Any]] = []
 
-        # Build per-worker reset kwargs. Goal-stage mixing is assigned when
-        # workers are constructed; reset coordinates per-group init sampling
-        # so GRPO replicas compare actions from the same state.
         if kwargs is None:
-            worker_kwargs = self._build_group_reset_kwargs({})
+            worker_kwargs = [{} for _ in range(self.num_processes)]
         elif isinstance(kwargs, dict):
-            # If caller provided an explicit `curriculum_state`, replicate it.
-            # Otherwise each worker uses the goal stage assigned at construction
-            # and samples an init state for that goal during reset.
-            if self._has_explicit_curriculum_state(kwargs):
-                worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
-            else:
-                worker_kwargs = self._build_group_reset_kwargs(dict(kwargs))
+            worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
         elif isinstance(kwargs, np.ndarray):
             worker_kwargs = kwargs.tolist()
         elif isinstance(kwargs, (list, tuple)):
@@ -557,39 +432,6 @@ class DiscoveryWorldVectorEnv:
             self._append_result(obs_list, info_list, obs, info)
 
         return obs_list, info_list
-
-    def _has_explicit_curriculum_state(self, kwargs: Dict[str, Any]) -> bool:
-        return "curriculum_state" in kwargs or "chemical_state" in kwargs
-
-    def _build_group_reset_kwargs(self, base_kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
-        if not self._curriculum_enabled:
-            return [dict(base_kwargs) for _ in range(self.num_processes)]
-
-        reset_idx = self._reset_count
-        self._reset_count += 1
-        rng = np.random.default_rng(self._curriculum_seed + reset_idx)
-        terminal_mask = np.zeros(self.env_num, dtype=bool)
-        if (
-            (self.is_train or self._curriculum_terminal_reset_eval)
-            and self._curriculum_terminal_reset_ratio > 0.0
-            and self.env_num > 0
-        ):
-            terminal_count = int(round(self.env_num * self._curriculum_terminal_reset_ratio))
-            terminal_count = min(max(terminal_count, 1), self.env_num)
-            terminal_groups = rng.permutation(self.env_num)[:terminal_count]
-            terminal_mask[terminal_groups] = True
-
-        worker_kwargs: List[Dict[str, Any]] = []
-        for group_idx in range(self.env_num):
-            sample_seed = self._curriculum_seed + reset_idx * max(self.env_num, 1) + group_idx
-            group_kwargs = dict(base_kwargs)
-            group_kwargs["curriculum_sample_seed"] = int(sample_seed)
-            if coerce_bool(terminal_mask[group_idx]):
-                group_kwargs["curriculum_terminal_reset"] = True
-            for _ in range(self.group_n):
-                worker_kwargs.append(dict(group_kwargs))
-
-        return worker_kwargs
 
     def step(
         self,

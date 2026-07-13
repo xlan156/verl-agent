@@ -20,7 +20,6 @@ export MINI_BATCH_SIZE=32
 export GROUP_SIZE=2
 export NUM_CPUS_PER_ENV_WORKER=0.1
 export EXPERIMENT_NAME="grpo-pickupjar-0708"
-export CURRICULUM_ENABLED=False
 export ENV_VARIANT=pickjar
 
 export RESUME_MODE=resume_path

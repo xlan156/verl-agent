@@ -33,7 +33,7 @@ fi
 
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-0.5B-Instruct}"
 # VAL_SIZE means the number of distinct environment seeds selected from the
-# fixed validation pool used when curriculum_enabled=False. It is NOT the
+# fixed validation pool. It is NOT the
 # total number of evaluation episodes. Each selected seed is evaluated
 # ROLLOUTS_PER_SEED times, so:
 #   total episodes = VAL_SIZE * ROLLOUTS_PER_SEED

@@ -140,7 +140,6 @@ def main() -> None:
                 "scenario_name": "Combinatorial Chemistry",
                 "difficulty": "Challenge",
                 "max_chemical_n": args.max_chemical_n,
-                "curriculum_enabled": False,
                 "target_train_fraction": args.target_train_fraction,
                 "eval_seed_pool": selected_seeds,
                 "env_variant": args.env_variant,
