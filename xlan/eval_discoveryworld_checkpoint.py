@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paper-style evaluation of a VERL checkpoint on fixed DiscoveryWorld val seeds."""
+"""Paper-style evaluation of a VERL checkpoint on fixed DiscoveryWorld seeds."""
 
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "Maximum --val-size with the default --target-train-fraction=0.8: "
+            "Maximum --eval-size for the val split with the default "
+            "--target-train-fraction=0.8: "
             "N=1: 1 (val seeds [3]); "
             "N=2: 2 (val seeds [8, 9]); "
             "N=3: 4 (val seeds [16, 17, 18, 19]); "
@@ -57,10 +58,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("checkpoint", type=Path, help="global_step_N or best_val_success checkpoint directory")
     parser.add_argument("--model-path", default="Qwen/Qwen2.5-0.5B-Instruct", help="Base HF model used to initialize the checkpoint architecture")
     parser.add_argument(
+        "--eval-size",
         "--val-size",
+        dest="eval_size",
         type=int,
         default=2,
-        help="Number of distinct seeds selected from the curriculum-disabled val pool; see limits below",
+        help="Number of distinct seeds selected from --eval-split; --val-size is a backward-compatible alias",
+    )
+    parser.add_argument(
+        "--eval-split",
+        choices=("val", "train"),
+        default="val",
+        help="Evaluate seeds from the curriculum-disabled validation or training pool",
     )
     parser.add_argument("--rollouts-per-seed", type=int, default=5)
     parser.add_argument("--max-chemical-n", type=int, default=2)
@@ -69,13 +78,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.4)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--env-variant", default="original")
-    parser.add_argument("--seed", type=int, default=0, help="Policy sampling seed; environment seeds come from the fixed val pool")
+    parser.add_argument("--seed", type=int, default=0, help="Policy sampling seed; environment seeds come from --eval-split")
     parser.add_argument("--num-gpus", type=int, default=1)
     parser.add_argument("--num-cpus-per-env", type=float, default=0.1)
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON summary path")
     args = parser.parse_args()
-    if args.val_size <= 0 or args.rollouts_per_seed <= 0:
-        parser.error("--val-size and --rollouts-per-seed must be positive")
+    if args.eval_size <= 0 or args.rollouts_per_seed <= 0:
+        parser.error("--eval-size and --rollouts-per-seed must be positive")
     return args
 
 
@@ -89,11 +98,14 @@ def main() -> None:
         max_amount=args.max_chemical_n,
         train_fraction=args.target_train_fraction,
     )
-    full_val_pool = pools[args.max_chemical_n]["val"]
-    if args.val_size > len(full_val_pool):
-        raise ValueError(f"val_size={args.val_size} exceeds the fixed val pool size {len(full_val_pool)}: {full_val_pool}")
+    full_eval_pool = pools[args.max_chemical_n][args.eval_split]
+    if args.eval_size > len(full_eval_pool):
+        raise ValueError(
+            f"eval_size={args.eval_size} exceeds the fixed {args.eval_split} pool size "
+            f"{len(full_eval_pool)}: {full_eval_pool}"
+        )
 
-    selected_seeds = full_val_pool[: args.val_size]
+    selected_seeds = full_eval_pool[: args.eval_size]
     total_episodes = len(selected_seeds) * args.rollouts_per_seed
 
     config_dir = str((Path(__file__).resolve().parents[1] / "verl/trainer/config").resolve())
@@ -179,9 +191,10 @@ def main() -> None:
         "eval_parameters": {
             "checkpoint": str(checkpoint),
             "model_path": args.model_path,
-            "val_size": args.val_size,
+            "eval_split": args.eval_split,
+            "eval_size": args.eval_size,
             "rollouts_per_seed": args.rollouts_per_seed,
-            "selected_val_seeds": selected_seeds,
+            "selected_eval_seeds": selected_seeds,
             "max_chemical_n": args.max_chemical_n,
             "target_train_fraction": args.target_train_fraction,
             "max_steps": args.max_steps,
@@ -192,7 +205,7 @@ def main() -> None:
             "vllm_gpu_memory_utilization": 0.6,
         },
     }
-    print("\nPaper-style validation summary")
+    print(f"\nPaper-style {args.eval_split}-split evaluation summary")
     print(json.dumps(summary, indent=2))
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

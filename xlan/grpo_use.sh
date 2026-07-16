@@ -9,6 +9,7 @@
 #SBATCH --error=job_log/grpo-jar-%j/Qwen0.5B-error.txt
 
 export MAX_CHEMICAL_N=2
+export TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
 export EPOCHS=200
 export MAX_STEP=15
 export LEARNING_RATE=1e-6

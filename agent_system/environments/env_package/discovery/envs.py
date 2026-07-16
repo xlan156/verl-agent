@@ -59,6 +59,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         save_frames: bool = False,
         frames_dir: Optional[str] = None,
         max_chemical_n: Optional[int] = None,
+        teacher_skill_reward_coef: float = 1.0,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -68,6 +69,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._save_frames = coerce_bool(save_frames)
         self._frames_dir = frames_dir
         self._max_chemical_n = int(max_chemical_n) if max_chemical_n is not None else 2
+        self._teacher_skill_reward_coef = float(teacher_skill_reward_coef)
         self._chemical_solution_state: Optional[Tuple[int, ...]] = None
 
         self._api: Optional[DiscoveryWorldAPI] = None
@@ -296,6 +298,7 @@ class DiscoveryWorldWorker:
             save_frames=worker_config.save_frames,
             frames_dir=worker_config.frames_dir,
             max_chemical_n=worker_config.max_chemical_n,
+            teacher_skill_reward_coef=worker_config.teacher_skill_reward_coef,
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
@@ -353,6 +356,7 @@ class DiscoveryWorldVectorEnv:
             min_chemicals=1,
             train_fraction=self._target_train_fraction,
         )
+        self._train_seed_pool = env_kwargs.get("train_seed_pool")
         self._eval_seed_pool = env_kwargs.get("eval_seed_pool")
 
         if self.num_processes == 0:
@@ -387,6 +391,8 @@ class DiscoveryWorldVectorEnv:
                 split_seed_list = list(
                     seed_pools.get(goal_stage, {}).get(selected_split, []),
                 )
+            if self.is_train and self._train_seed_pool is not None:
+                split_seed_list = [int(value) for value in self._train_seed_pool]
             if not self.is_train and self._eval_seed_pool is not None:
                 split_seed_list = [int(value) for value in self._eval_seed_pool]
             if not split_seed_list:

@@ -9,6 +9,7 @@
 #SBATCH --error=/home/xlan1/projects/verl-agent/job_log/gigpo-%j/gigpo-error.txt
 
 export MAX_CHEMICAL_N=2
+export TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
 export EPOCHS=150
 export MAX_STEP=20
 export LEARNING_RATE=1e-6

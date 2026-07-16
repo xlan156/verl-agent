@@ -12,6 +12,7 @@
 export MODEL_PATH="/home/xlan1/projects/verl-agent/qwen_hf_model"
 
 export MAX_CHEMICAL_N=2
+export TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
 export EPOCHS=100
 export MAX_STEP=20
 export LEARNING_RATE=1e-6

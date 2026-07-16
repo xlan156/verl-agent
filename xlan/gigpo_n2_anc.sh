@@ -11,6 +11,7 @@
 set -euo pipefail
 
 export MAX_CHEMICAL_N=3
+export TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
 export EPOCHS=100
 export MAX_STEP=20
 export TRAIN_DATA_SIZE=8

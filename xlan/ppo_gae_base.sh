@@ -49,6 +49,7 @@ RESUME_FROM_PATH="${RESUME_FROM_PATH:-null}"
 
 DO_SFT="${DO_SFT:-False}"
 MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-2}"
+TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
 ENV_SEED="${ENV_SEED:-0}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 
@@ -144,6 +145,7 @@ python3 -m verl.trainer.main_ppo \
     +env.discoveryworld.env_variant=${DISCOVERYWORLD_ENV_VARIANT} \
     +env.discoveryworld.save_frames=False \
     +env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N} \
+    +env.discoveryworld.teacher_skill_reward_coef=${TEACHER_REWARD_COEF} \
     env.resources_per_worker.num_cpus=$NUM_CPUS_PER_ENV_WORKER \
     trainer.critic_warmup=0 \
     trainer.logger="['console','wandb']" \

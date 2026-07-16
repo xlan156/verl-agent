@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
-#SBATCH --time=00:20:00
+#SBATCH --time=00:10:00
 #SBATCH --output=job_log/eval-ckpt/eval-ckpt-%j.out
 #SBATCH --error=job_log/eval-ckpt/eval-ckpt-%j.err
 
@@ -22,6 +22,7 @@ export HYDRA_FULL_ERROR=1
 export VLLM_ATTENTION_BACKEND=XFORMERS
 export MPLCONFIGDIR="${TMPDIR:-/tmp}/matplotlib-${SLURM_JOB_ID:-local}"
 
+
 # This default can be overridden when submitting, for example:
 # CHECKPOINT_PATH=checkpoints/.../global_step_100 sbatch xlan/eval_model.sh
 CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-n3-0712/best_val_success}"
@@ -32,18 +33,30 @@ if [[ ! -d "$CHECKPOINT_PATH/actor" ]]; then
 fi
 
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-0.5B-Instruct}"
-# VAL_SIZE means the number of distinct environment seeds selected from the
-# fixed validation pool. It is NOT the
+# EVAL_SPLIT selects the fixed seed pool: "val" (default) or "train".
+# EVAL_SIZE means the number of distinct environment seeds selected from that
+# pool. It is NOT the
 # total number of evaluation episodes. Each selected seed is evaluated
 # ROLLOUTS_PER_SEED times, so:
-#   total episodes = VAL_SIZE * ROLLOUTS_PER_SEED
-# VAL_SIZE cannot exceed the validation-pool size determined by
+#   total episodes = EVAL_SIZE * ROLLOUTS_PER_SEED
+# EVAL_SIZE cannot exceed the selected pool size determined by
 # MAX_CHEMICAL_N and TARGET_TRAIN_FRACTION. With the defaults below (N=3,
 # train_fraction=0.8), there are 20 target combinations: seeds 0-15 are train
-# and seeds [16, 17, 18, 19] are validation, so the maximum VAL_SIZE is 4.
-MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-4}"
-VAL_SIZE="${VAL_SIZE:-7}"
-ROLLOUTS_PER_SEED="${ROLLOUTS_PER_SEED:-20}"
+# and seeds [16, 17, 18, 19] are validation. The maximum EVAL_SIZE is therefore
+# 16 for EVAL_SPLIT=train and 4 for EVAL_SPLIT=val.
+# Examples:
+#   EVAL_SPLIT=train EVAL_SIZE=16 sbatch xlan/eval_model.sh
+#   EVAL_SPLIT=val   EVAL_SIZE=4  sbatch xlan/eval_model.sh
+MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-3}"
+EVAL_SPLIT="${EVAL_SPLIT:-train}"
+# Keep VAL_SIZE as a fallback for older submission commands.
+EVAL_SIZE="${EVAL_SIZE:-${VAL_SIZE:-16}}"
+ROLLOUTS_PER_SEED="${ROLLOUTS_PER_SEED:-8}"
+
+if [[ "$EVAL_SPLIT" != "val" && "$EVAL_SPLIT" != "train" ]]; then
+    echo "EVAL_SPLIT must be 'val' or 'train', got: $EVAL_SPLIT" >&2
+    exit 1
+fi
 
 TARGET_TRAIN_FRACTION="${TARGET_TRAIN_FRACTION:-0.8}"
 MAX_STEP="${MAX_STEP:-30}"
@@ -60,7 +73,8 @@ mkdir -p "$(dirname "$OUTPUT_PATH")" "$MPLCONFIGDIR"
 python xlan/eval_discoveryworld_checkpoint.py \
     "$CHECKPOINT_PATH" \
     --model-path "$MODEL_PATH" \
-    --val-size "$VAL_SIZE" \
+    --eval-split "$EVAL_SPLIT" \
+    --eval-size "$EVAL_SIZE" \
     --rollouts-per-seed "$ROLLOUTS_PER_SEED" \
     --max-chemical-n "$MAX_CHEMICAL_N" \
     --target-train-fraction "$TARGET_TRAIN_FRACTION" \
@@ -72,3 +86,5 @@ python xlan/eval_discoveryworld_checkpoint.py \
     --num-gpus "$NUM_GPUS" \
     --num-cpus-per-env "$NUM_CPUS_PER_ENV_WORKER" \
     --output "$OUTPUT_PATH"
+
+ray stop

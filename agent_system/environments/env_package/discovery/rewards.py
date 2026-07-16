@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 FORMAT_REWARD_SCALE = 0.5
 TASK_COMPLETION_BONUS = 20.0
+REPEATED_COMBINATION_PENALTY = -1.0
+NO_PROGRESS_CHEMICAL_PENALTY = -0.5
 
 
 class DiscoveryWorldRewardMixin:
@@ -45,17 +47,38 @@ class DiscoveryWorldRewardMixin:
             )
             return 0.0
 
-        # In the chemistry phase, the teacher only specifies the action class
-        # "add one chemical". Any concrete dispenser A/B/C/D is correct.
-        if is_dispenser_skill(teacher_skill):
-            return 0.2 if is_dispenser_skill(skill_name) else 0.0
-
-        if is_remove_skill(teacher_skill):
-            return 0.2 if is_remove_skill(skill_name) else 0.0
-
         if skill_name == teacher_skill:
             return 1.0
         return 0.0
+
+    @staticmethod
+    def _chemical_combination(info: Optional[Dict[str, Any]]) -> Tuple[int, int, int, int]:
+        chemical_dict = (info or {}).get("chemical_dict", {}) or {}
+        return tuple(int(chemical_dict.get(chemical, 0) or 0) for chemical in ("A", "B", "C", "D"))
+
+    def _chemical_exploration_reward(
+        self,
+        skill_name: Optional[str],
+        info: Dict[str, Any],
+    ) -> Tuple[float, bool]:
+        """Penalize chemical actions that revisit states or make no progress."""
+        if not (is_dispenser_skill(skill_name) or is_remove_skill(skill_name)):
+            return 0.0, False
+
+        if not hasattr(self, "_seen_chemical_combinations"):
+            self._seen_chemical_combinations = set()
+
+        previous_combo = self._chemical_combination(self._last_info)
+        current_combo = self._chemical_combination(info)
+        self._seen_chemical_combinations.add(previous_combo)
+        repeated_combination = current_combo in self._seen_chemical_combinations
+
+        penalty = REPEATED_COMBINATION_PENALTY if repeated_combination else 0.0
+        if current_combo == previous_combo:
+            penalty += NO_PROGRESS_CHEMICAL_PENALTY
+
+        self._seen_chemical_combinations.add(current_combo)
+        return penalty, repeated_combination
 
     def _repetition_penalty(self) -> float:
         penalty = 0.0
@@ -107,15 +130,23 @@ class DiscoveryWorldRewardMixin:
         prev_score = self._prev_score
         game_progress_reward = self._game_progress_reward(cur_score)
         teacher_skill_reward = self._teacher_skill_reward(skill_name, self._last_info)
+        chemical_exploration_reward, repeated_combination = self._chemical_exploration_reward(skill_name, info)
+
+        # A repeated chemical state must never receive a positive teacher
+        # reward, even if the action happens to match the teacher.
+        if repeated_combination:
+            teacher_skill_reward = 0.0
 
         repetition_penalty = self._repetition_penalty()
-        #invalid_penalty = self._invalid_action_penalty(info)
         no_progress_penalty = self._no_progress_move_penalty(skill_name, cur_score, prev_score)
         format_reward = FORMAT_REWARD_SCALE * float(np.clip(format_score, 0.0, 1.0))
         info["teacher_skill"] = self._last_teacher_skill
         info["reward_components"] = {
             "game_progress": game_progress_reward,
             "teacher_skill": teacher_skill_reward,
+            "teacher_skill_weighted": self._teacher_skill_reward_coef * teacher_skill_reward,
+            "chemical_exploration": chemical_exploration_reward,
+            "repeated_chemical_combination": repeated_combination,
             "repetition_penalty": repetition_penalty,
             "no_progress_penalty": no_progress_penalty,
             "format": format_reward,
@@ -127,11 +158,12 @@ class DiscoveryWorldRewardMixin:
 
         reward = 0.0
         reward += 20.0 * game_progress_reward
-        reward += teacher_skill_reward
+        reward += self._teacher_skill_reward_coef * teacher_skill_reward
         # Keep schema reward small once the policy mostly emits valid actions;
         # otherwise long non-winning episodes can outrank the terminal action.
         reward += format_reward
 
+        reward += chemical_exploration_reward
         reward += repetition_penalty
         reward += no_progress_penalty
 

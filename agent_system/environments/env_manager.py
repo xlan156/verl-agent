@@ -716,6 +716,10 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         counts = self._chemical_counts(chemical_dict)
         return ",".join(f"{chemical}={counts[chemical]}" for chemical in ("A", "B", "C", "D"))
 
+    def _chemical_tuple_text(self, chemical_dict: Dict[str, Any]) -> str:
+        counts = self._chemical_counts(chemical_dict)
+        return "(" + ",".join(str(counts[chemical]) for chemical in ("A", "B", "C", "D")) + ")"
+
     def _rust_change_text(self, previous_level: Any, current_level: Any) -> str:
         from agent_system.environments.env_package.discovery.utils import RUST_LABEL_TO_LEVEL, format_rust_level
 
@@ -743,44 +747,42 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
     def build_chemical_belief(self, item: int, info: Dict[str, Any], max_records: int = 16) -> str:
         records = self.memory[item] if item < len(self.memory) else []
-        current_combo = self._chemical_counts_text(info.get("chemical_dict"))
-        current_rust = str(info.get("key_rust_status") or "unknown").strip().lower()
+        valid_rust_levels = {
+            "heavily rusted",
+            "moderately rusted",
+            "lightly rusted",
+            "no rust",
+        }
+        max_records = max(int(max_records), 0)
 
-        combo_results: Dict[Tuple[int, int, int, int], Dict[str, Any]] = {}
+        # Dict insertion order keeps the observations chronological. Re-observing
+        # a combination moves it to the end so the prompt contains its latest
+        # result and the most recently relevant combinations.
+        combo_results: Dict[Tuple[int, int, int, int], str] = {}
         for record in records:
-            action = record.get("action")
-            pre_combo = self._chemical_counts(record.get("pre_chemical_dict"))
             post_combo = self._chemical_counts(record.get("post_chemical_dict"))
-            combo_changed = pre_combo != post_combo
-            rust_changed = self._rust_change_text(record.get("pre_rust_level"), record.get("rust_level"))
-            if not self._is_chemical_action(action) and not combo_changed:
+            rust_status = str(record.get("rust_status") or "").strip().lower()
+            if rust_status not in valid_rust_levels:
                 continue
-            if not combo_changed and ("no change" in rust_changed or rust_changed == "unknown -> unknown"):
-                continue
-
             combo_tuple = tuple(post_combo[chemical] for chemical in ("A", "B", "C", "D"))
-            entry = {
-                "combo": self._chemical_counts_text(post_combo),
-                "action": action,
-                "transition": rust_changed,
-                "step": len(combo_results) + 1,
-            }
-            combo_results[combo_tuple] = entry
+            combo_results.pop(combo_tuple, None)
+            combo_results[combo_tuple] = rust_status
 
-        lines = [
-            f"Current combination vector: {current_combo}",
-            f"Current rust status: {current_rust}",
-        ]
-        if not combo_results:
-            lines.append("Observed combination effects: none yet")
-            return "\n".join(lines)
+        current_combo = self._chemical_counts(info.get("chemical_dict"))
+        current_rust = str(info.get("key_rust_status") or "").strip().lower()
+        if current_rust in valid_rust_levels:
+            current_tuple = tuple(current_combo[chemical] for chemical in ("A", "B", "C", "D"))
+            combo_results.pop(current_tuple, None)
+            combo_results[current_tuple] = current_rust
 
-        lines.append("Observed combination effects:")
-        for _, entry in sorted(combo_results.items())[-max_records:]:
-            lines.append(
-                f"- {entry['combo']} after {entry['action']}: rust {entry['transition']}"
-            )
-        return "\n".join(lines)
+        if max_records == 0 or not combo_results:
+            return "No chemical combination has been observed yet."
+
+        recent_results = list(combo_results.items())[-max_records:]
+        return "\n".join(
+            f"{self._chemical_tuple_text(dict(zip(('A', 'B', 'C', 'D'), combo)))} -> {rust_status}"
+            for combo, rust_status in recent_results
+        )
 
     def build_anchor_obs(self, text_obs: List[str], infos: List[Dict[str, Any]]) -> List[str]:
         discovery_cfg = getattr(self.config.env, "discoveryworld", None)
@@ -831,11 +833,16 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
             chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
             key_state = format_key_status(infos[i].get("key_rust_status"))
-            chemical_belief = self.build_chemical_belief(i, infos[i], max_records=int(getattr(discovery_cfg, "belief_history_length", 16)))
+            chemical_belief = self.build_chemical_belief(
+                i,
+                infos[i],
+                max_records=int(self.config.env.history_length),
+            )
             valid_skill_names = get_valid_discoveryworld_skills(infos[i], max_chemical_n=max_chemical_n)
             infos[i]["valid_skills"] = list(valid_skill_names)
             valid_skills = "\n".join(valid_skill_names)
-            if init or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
+            in_chemical_stage = bool(infos[i].get("is_key_in_jar"))
+            if init or in_chemical_stage or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
                 obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
                     max_chemical_n=max_chemical_n,
                     chemical_state=chemical_state,
@@ -990,7 +997,9 @@ def make_envs(config):
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
         target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
+        teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 1.0)
         env_variant = getattr(discovery_cfg, "env_variant", "original")
+        train_seed_pool = getattr(discovery_cfg, "train_seed_pool", None)
         eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)
 
         env_kwargs = {
@@ -1002,6 +1011,8 @@ def make_envs(config):
             "val_size": config.data.val_batch_size,
             "max_chemical_n": max_chemical_n,
             "target_train_fraction": target_train_fraction,
+            "teacher_skill_reward_coef": teacher_skill_reward_coef,
+            "train_seed_pool": train_seed_pool,
             "eval_seed_pool": eval_seed_pool,
         }
         if save_frames is not None:

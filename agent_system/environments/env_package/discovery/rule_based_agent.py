@@ -1,5 +1,3 @@
-import random
-from copy import deepcopy
 from agent_system.environments.env_package.discovery.utils import *
 
 
@@ -116,10 +114,61 @@ class RulebasedAgentSkill:
     def __init__(self, env):
         self.env = env
         self.skill_counter = {}
+        self.observed_combinations = set()
+        self.previous_combination = None
         
     def skill(self, skill_name):
         self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
         return skill_name
+
+    @staticmethod
+    def get_curr_combination(info):
+        chemical_dict = info.get("chemical_dict", {}) or {}
+        return tuple(int(chemical_dict.get(chemical, 0) or 0) for chemical in ("A", "B", "C", "D"))
+
+    def select_use_or_remove(self, info):
+        """Choose a deterministic, previously untested one-step combination."""
+        current = self.get_curr_combination(info)
+        self.observed_combinations.add(current)
+        max_amount = int(self.env._max_chemical_n)
+        total = sum(current)
+        chemicals = ("A", "B", "C", "D")
+        offset = int(getattr(self.env, "_seed", 0)) % len(chemicals)
+        chemical_order = chemicals[offset:] + chemicals[:offset]
+
+        candidates = []
+        if total < max_amount:
+            for chemical in chemical_order:
+                index = chemicals.index(chemical)
+                next_combo = list(current)
+                next_combo[index] += 1
+                candidates.append((f"use_dispenser_{chemical}_on_jar", tuple(next_combo)))
+        else:
+            for chemical in chemical_order:
+                index = chemicals.index(chemical)
+                if current[index] <= 0:
+                    continue
+                next_combo = list(current)
+                next_combo[index] -= 1
+                candidates.append((f"remove_chemical_{chemical}", tuple(next_combo)))
+
+        # Prefer an unobserved state and never immediately undo the preceding
+        # transition when another unexplored option exists.
+        unexplored = [
+            candidate
+            for candidate in candidates
+            if candidate[1] not in self.observed_combinations
+            and candidate[1] != self.previous_combination
+        ]
+        if not unexplored:
+            unexplored = [
+                candidate
+                for candidate in candidates
+                if candidate[1] not in self.observed_combinations
+            ]
+        selected = (unexplored or candidates)[0] if candidates else None
+        self.previous_combination = current
+        return self.skill(selected[0]) if selected else None
     
     def select_skill(self, info):
         ui = (info.get("raw_observation") or {}).get("ui", {})
@@ -141,8 +190,6 @@ class RulebasedAgentSkill:
         clean_key_accessible = KEY_NO_RUST in accessible_objects
         
         is_key_in_jar = info.get("is_key_in_jar", False)
-        used_dispensers = info.get("used_dispensers", {})
-        
         if not rusted_key_in_hand and not clean_key_in_hand and location != (17, 12):
             return self.skill("move_to_key")
         
@@ -161,41 +208,11 @@ class RulebasedAgentSkill:
         if rusted_key_in_hand and JAR in inv_objects and not is_key_in_jar:
             return self.skill("put_key_in_jar")
         
-        if self.env._max_chemical_n == 1:
-            chem = random.choice(["A", "B", "C", "D"])
-            target_dispenser_location = {
-                "A": (18, 12),
-                "B": (19, 12),
-                "C": (20, 12),
-                "D": (21, 12),
-            }[chem]
-            used_any_dispenser = any(used_dispensers.get(d) for d in ["A", "B", "C", "D"])
-            
-            if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and not used_any_dispenser:
-                return self.skill(f"use_dispenser_{chem}_on_jar")
-            
-            if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects and used_any_dispenser:
-                return self.skill("wash_jar")
-            
-            if KEY_NO_RUST in inv_objects:
-                return self.skill("open_door")
-        
-        if self.env._max_chemical_n > 1:
-            chem = random.choice(["A", "B", "C", "D"])
-            sum_chemical_dict = sum(info.get("chemical_dict", {}).values())
-            if sum_chemical_dict < self.env._max_chemical_n:
-                if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
-                    return self.skill(f"use_dispenser_{chem}_on_jar")
-                if KEY_NO_RUST in inv_objects:
-                    return self.skill("open_door")
-            else:
-                curr_dict = deepcopy(info.get("chemical_dict", {}))
-                available_chems = [chem for chem, count in curr_dict.items() if count > 0]
-                chem = random.choice(available_chems)
-                if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
-                    return self.skill(f"remove_chemical_{chem}")
-                if KEY_NO_RUST in inv_objects:
-                    return self.skill("open_door")
+        if clean_key_in_hand or info.get("key_rust_status") == "no rust":
+            return self.skill("open_door")
+
+        if is_key_in_jar and rusted_key_in_hand and JAR in inv_objects:
+            return self.select_use_or_remove(info)
         
         return None
     
