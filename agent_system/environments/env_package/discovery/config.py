@@ -67,7 +67,7 @@ class DiscoveryWorkerConfig:
     save_frames: bool = False
     frames_dir: Optional[str] = None
     max_chemical_n: int = 2
-    teacher_skill_reward_coef: float = 1.0
+    teacher_skill_reward_coef: float = 0.1
     env_variant: str = "original"
 
     @classmethod
@@ -86,6 +86,6 @@ class DiscoveryWorkerConfig:
             save_frames=coerce_bool(kwargs.pop("save_frames", False)),
             frames_dir=kwargs.pop("frames_dir", None),
             max_chemical_n=max_chemical_n,
-            teacher_skill_reward_coef=float(kwargs.pop("teacher_skill_reward_coef", 1.0)),
+            teacher_skill_reward_coef=float(kwargs.pop("teacher_skill_reward_coef", 0.1)),
             env_variant=str(kwargs.pop("env_variant", "original")),  # original, pickupjar, derustmoderate
         )

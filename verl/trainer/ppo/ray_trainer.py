@@ -1042,6 +1042,17 @@ class RayPPOTrainer:
         print(f"Setting global step to {self.global_steps}")
         print(f"Resuming from {global_step_folder}")
 
+        # Fail before loading model/optimizer state or starting validation and
+        # rollout when this checkpoint has no training steps left.
+        if not self.config.trainer.get("val_only", False) and self.global_steps >= self.total_training_steps:
+            raise ValueError(
+                "Cannot resume training because the checkpoint has already reached "
+                f"the configured training horizon: checkpoint global_step={self.global_steps}, "
+                f"total_training_steps={self.total_training_steps}. Increase trainer.total_epochs "
+                "(or trainer.total_training_steps), choose an earlier checkpoint, or set "
+                "trainer.val_only=True for evaluation only."
+            )
+
         actor_path = os.path.join(global_step_folder, "actor")
         critic_path = os.path.join(global_step_folder, "critic")
         # load actor

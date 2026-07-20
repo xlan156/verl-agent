@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 from typing import Dict, List
 import random
 
@@ -93,12 +94,27 @@ def build_ordered_seed_pools_by_amount(
 	min_chemicals: int = 1,
 	train_fraction: float = 0.8,
 ) -> Dict[int, Dict[str, List[int]]]:
-	"""Split target seeds by the canonical combination order without shuffling.
+	"""Stratify target seeds by target arity, then split without overlap.
 
-	This is used when curriculum is disabled: train and val should cycle through
-	disjoint, easy-to-inspect target pools while preserving DiscoveryWorld's
-	stable target ordering.
+	Canonical target order groups all one-, two-, and three-chemical targets
+	together. A contiguous split therefore puts structurally harder targets only
+	in validation. We split each arity independently, then round-robin the
+	strata so even a small environment batch sees structurally diverse targets.
 	"""
+	def interleave(strata: Dict[int, List[int]]) -> List[int]:
+		ordered: List[int] = []
+		depth = 0
+		while True:
+			added = False
+			for arity in sorted(strata):
+				values = strata[arity]
+				if depth < len(values):
+					ordered.append(values[depth])
+					added = True
+			if not added:
+				return ordered
+			depth += 1
+
 	max_amount = max(1, int(max_amount))
 	train_fraction = min(max(float(train_fraction), 0.0), 1.0)
 	pools: Dict[int, Dict[str, List[int]]] = {}
@@ -109,21 +125,28 @@ def build_ordered_seed_pools_by_amount(
 			minAmount=int(amount),
 			maxAmount=int(amount),
 		)
-		total_combinations = len(all_combinations)
-		if total_combinations <= 0:
+		if not all_combinations:
 			raise ValueError("No valid chemical combinations available for seed assignment")
 
-		candidate_seeds = list(range(total_combinations))
-		if total_combinations == 1:
-			train_pool = candidate_seeds[:1]
-			val_pool = candidate_seeds[:1]
-		else:
-			train_pool_size = int(round(total_combinations * train_fraction))
-			train_pool_size = max(1, min(total_combinations - 1, train_pool_size))
-			train_pool = candidate_seeds[:train_pool_size]
-			val_pool = candidate_seeds[train_pool_size:]
-			if not val_pool:
-				val_pool = candidate_seeds[-1:]
+		seeds_by_arity: Dict[int, List[int]] = defaultdict(list)
+		for seed, combination in enumerate(all_combinations):
+			arity = sum(1 for value in combination.values() if int(value) > 0)
+			seeds_by_arity[arity].append(seed)
+
+		train_by_arity: Dict[int, List[int]] = {}
+		val_by_arity: Dict[int, List[int]] = {}
+		for arity, seeds in seeds_by_arity.items():
+			if len(seeds) == 1:
+				train_by_arity[arity] = list(seeds)
+				val_by_arity[arity] = list(seeds)
+				continue
+			train_size = int(round(len(seeds) * train_fraction))
+			train_size = max(1, min(len(seeds) - 1, train_size))
+			train_by_arity[arity] = seeds[:train_size]
+			val_by_arity[arity] = seeds[train_size:]
+
+		train_pool = interleave(train_by_arity)
+		val_pool = interleave(val_by_arity)
 
 		pools[amount] = {
 			"train": train_pool,

@@ -15,7 +15,7 @@ source "$HOME/venvs/verlagentdis/bin/activate"
 
 # CHECKPOINT_DIR must be the directory containing actor/, for example
 # best_val_success or global_step_100. The defaults merge this run's best model.
-ACTOR_DIR="/home/xlan1/projects/verl-agent/checkpoints/GRPO-discoveryworld/grpo-n3-0711/best_val_success/actor"
+ACTOR_DIR="/home/xlan1/projects/verl-agent/checkpoints/GRPO-discoveryworld/grpo-n3-0718/best_val_success/actor"
 TARGET_DIR="/home/xlan1/projects/verl-agent/qwen_hf_model"
 
 if [[ ! -f "$ACTOR_DIR/config.json" ]]; then

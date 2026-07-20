@@ -107,8 +107,16 @@ def discoveryworld_projection(
     for response, info in zip(actions, infos):
         skill = _extract_skill(response)
         if skill is not None and info is not None:
-            max_chemical_n = int((info or {}).get("max_chemical_n", 2) or 2)
-            valid_skills = set(get_valid_discoveryworld_skills(info, max_chemical_n=max_chemical_n))
+            prompt_valid_skills = (info or {}).get("valid_skills")
+            if prompt_valid_skills is not None:
+                # The prompt builder has memory-aware filtering that cannot be
+                # reconstructed from the current info alone.
+                valid_skills = set(prompt_valid_skills)
+            else:
+                max_chemical_n = int((info or {}).get("max_chemical_n", 2) or 2)
+                valid_skills = set(
+                    get_valid_discoveryworld_skills(info, max_chemical_n=max_chemical_n)
+                )
             if skill not in valid_skills:
                 skill = None
         processed.append(skill)

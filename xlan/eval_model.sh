@@ -25,7 +25,7 @@ export MPLCONFIGDIR="${TMPDIR:-/tmp}/matplotlib-${SLURM_JOB_ID:-local}"
 
 # This default can be overridden when submitting, for example:
 # CHECKPOINT_PATH=checkpoints/.../global_step_100 sbatch xlan/eval_model.sh
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-n3-0712/best_val_success}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-0720/best_val_success}"
 
 if [[ ! -d "$CHECKPOINT_PATH/actor" ]]; then
     echo "Checkpoint actor directory not found: $CHECKPOINT_PATH/actor" >&2
@@ -51,7 +51,7 @@ MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-3}"
 EVAL_SPLIT="${EVAL_SPLIT:-train}"
 # Keep VAL_SIZE as a fallback for older submission commands.
 EVAL_SIZE="${EVAL_SIZE:-${VAL_SIZE:-16}}"
-ROLLOUTS_PER_SEED="${ROLLOUTS_PER_SEED:-8}"
+ROLLOUTS_PER_SEED="${ROLLOUTS_PER_SEED:-5}"
 
 if [[ "$EVAL_SPLIT" != "val" && "$EVAL_SPLIT" != "train" ]]; then
     echo "EVAL_SPLIT must be 'val' or 'train', got: $EVAL_SPLIT" >&2
@@ -59,13 +59,13 @@ if [[ "$EVAL_SPLIT" != "val" && "$EVAL_SPLIT" != "train" ]]; then
 fi
 
 TARGET_TRAIN_FRACTION="${TARGET_TRAIN_FRACTION:-0.8}"
-MAX_STEP="${MAX_STEP:-30}"
+MAX_STEP="${MAX_STEP:-40}"
 VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
 VAL_TOP_P="${VAL_TOP_P:-0.9}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 EVAL_SEED="${EVAL_SEED:-0}"
 NUM_GPUS="${NUM_GPUS:-1}"
-NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.1}"
+NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.05}"
 OUTPUT_PATH="${OUTPUT_PATH:-xlan/results/discoveryworld-eval-${SLURM_JOB_ID:-local}.json}"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")" "$MPLCONFIGDIR"

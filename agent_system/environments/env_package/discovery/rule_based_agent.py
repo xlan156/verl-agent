@@ -1,3 +1,5 @@
+import math
+
 from agent_system.environments.env_package.discovery.utils import *
 
 
@@ -116,6 +118,10 @@ class RulebasedAgentSkill:
         self.skill_counter = {}
         self.observed_combinations = set()
         self.previous_combination = None
+        # This is the teacher's belief, built only from reaction signals that
+        # are present in the observation.  Do not use env._hidden_chemical_target
+        # here: the teacher should have the same information as the policy.
+        self.chemical_evidence = {}
         
     def skill(self, skill_name):
         self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
@@ -126,10 +132,40 @@ class RulebasedAgentSkill:
         chemical_dict = info.get("chemical_dict", {}) or {}
         return tuple(int(chemical_dict.get(chemical, 0) or 0) for chemical in ("A", "B", "C", "D"))
 
+    def update_chemical_belief(self, info):
+        """Record the current assay and return targets consistent with history."""
+        current = self.get_curr_combination(info)
+        signal = str(info.get("current_reaction_signal") or "").strip().lower()
+        if (
+            info.get("is_key_in_jar")
+            and any(current)
+            and signal in REACTION_SIGNAL_TO_RUST
+        ):
+            self.chemical_evidence[current] = ("observed", signal)
+
+        required_amount = int(info.get("max_chemical_n", self.env._max_chemical_n) or 0)
+        return candidate_targets(self.chemical_evidence, required_amount)
+
+    @staticmethod
+    def _expected_information_gain(combination, targets):
+        """Expected log candidate reduction from assaying ``combination``."""
+        if not targets:
+            return 0.0
+        partitions = {}
+        for target in targets:
+            signal = reaction_signal_for_tuples(combination, target)
+            partitions[signal] = partitions.get(signal, 0) + 1
+        candidate_count = len(targets)
+        return sum(
+            (size / candidate_count) * math.log(candidate_count / size)
+            for size in partitions.values()
+        )
+
     def select_use_or_remove(self, info):
-        """Choose a deterministic, previously untested one-step combination."""
+        """Choose a belief-directed, deterministic one-step experiment."""
         current = self.get_curr_combination(info)
         self.observed_combinations.add(current)
+        targets = self.update_chemical_belief(info)
         max_amount = int(self.env._max_chemical_n)
         total = sum(current)
         chemicals = ("A", "B", "C", "D")
@@ -152,23 +188,47 @@ class RulebasedAgentSkill:
                 next_combo[index] -= 1
                 candidates.append((f"remove_chemical_{chemical}", tuple(next_combo)))
 
-        # Prefer an unobserved state and never immediately undo the preceding
-        # transition when another unexplored option exists.
-        unexplored = [
-            candidate
-            for candidate in candidates
-            if candidate[1] not in self.observed_combinations
-            and candidate[1] != self.previous_combination
-        ]
-        if not unexplored:
-            unexplored = [
-                candidate
-                for candidate in candidates
-                if candidate[1] not in self.observed_combinations
-            ]
-        selected = (unexplored or candidates)[0] if candidates else None
+        if not candidates:
+            return None
+
+        def rank(candidate):
+            _, next_combo = candidate
+            unobserved = next_combo not in self.chemical_evidence
+            no_immediate_undo = next_combo != self.previous_combination
+
+            if len(targets) == 1:
+                # Once the belief is resolved, take the edge with the largest
+                # L1-distance reduction toward that target.
+                target = targets[0]
+                old_distance = sum(abs(value - goal) for value, goal in zip(current, target))
+                new_distance = sum(abs(value - goal) for value, goal in zip(next_combo, target))
+                progress = old_distance - new_distance
+                return (progress, unobserved, no_immediate_undo)
+
+            # Match the reward's realized log candidate reduction in
+            # expectation. An already-observed state yields no new evidence.
+            expected_information_gain = (
+                self._expected_information_gain(next_combo, targets)
+                if unobserved
+                else 0.0
+            )
+            mean_distance = (
+                sum(
+                    sum(abs(value - goal) for value, goal in zip(next_combo, target))
+                    for target in targets
+                ) / len(targets)
+                if targets else float("inf")
+            )
+            return (
+                expected_information_gain,
+                unobserved,
+                -mean_distance,
+                no_immediate_undo,
+            )
+
+        selected = max(candidates, key=rank)
         self.previous_combination = current
-        return self.skill(selected[0]) if selected else None
+        return self.skill(selected[0])
     
     def select_skill(self, info):
         ui = (info.get("raw_observation") or {}).get("ui", {})

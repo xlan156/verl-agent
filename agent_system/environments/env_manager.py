@@ -26,6 +26,13 @@ from omegaconf import OmegaConf
 
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
+from agent_system.environments.env_package.discovery.utils import (
+    all_action_abbr,
+    build_discoveryworld_anchor_obs,
+    build_discoveryworld_text_obs,
+    build_chemical_belief_state,
+    observable_experiment_evidence,
+)
 from agent_system.memory import SimpleMemory, SearchMemory
 
 
@@ -632,7 +639,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        from agent_system.environments.env_package.discovery.utils import all_action_abbr
         self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
@@ -643,8 +649,8 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
-        full_text_obs = self.build_text_obs(text_obs, infos, init=True)
-        anchor_obs = self.build_anchor_obs(text_obs, infos)
+        full_text_obs = build_discoveryworld_text_obs(text_obs, infos, self.memory, self.config, init=True)
+        anchor_obs = build_discoveryworld_anchor_obs(text_obs, infos, self.memory, self.config)
         return {"text": full_text_obs, "image": None, "anchor": anchor_obs}, infos
 
     def step(self, text_actions: List[str]):
@@ -659,13 +665,20 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             0.0 if action is None and score >= 1.0 else score
             for action, score in zip(actions, format_scores)
         ]
-        text_obs, rewards, dones, infos = self.envs.step(actions, format_scores=format_scores)
+        text_obs, rewards, dones, infos = self.envs.step(
+            actions,
+            format_scores=format_scores,
+        )
 
         # Keep failed formatting visible to the next prompt without claiming
         # that an action was executed.  The environment itself receives None.
         history_actions = [
             action if action is not None else "<invalid format: no action executed>"
             for action in actions
+        ]
+        experiment_evidence = [
+            observable_experiment_evidence(previous, current)
+            for previous, current in zip(self.last_infos, infos)
         ]
         self.memory.store({
             "text_obs": self.pre_text_obs,
@@ -674,13 +687,23 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             "post_chemical_dict": [info.get("chemical_dict") for info in infos],
             "pre_rust_level": [info.get("key_rust_level") for info in self.last_infos],
             "pre_rust_status": [info.get("key_rust_status") for info in self.last_infos],
+            "pre_reaction_signal": [
+                info.get("current_reaction_signal") for info in self.last_infos
+            ],
             "rust_level": [info.get("key_rust_level") for info in infos],
             "rust_status": [info.get("key_rust_status") for info in infos],
+            "reaction_signal": [info.get("current_reaction_signal") for info in infos],
+            "experiment_evidence_kind": [
+                evidence.get("kind") if evidence else None for evidence in experiment_evidence
+            ],
+            "experiment_evidence_label": [
+                evidence.get("label") if evidence else None for evidence in experiment_evidence
+            ],
         })
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
-        full_text_obs = self.build_text_obs(text_obs, infos, init=False)
+        full_text_obs = build_discoveryworld_text_obs(text_obs, infos, self.memory, self.config)
 
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
@@ -692,7 +715,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             info["response_format_valid"] = bool(valids[i])
             info["response_format_score"] = float(format_scores[i])
 
-        anchor_obs = self.build_anchor_obs(text_obs, infos)
+        anchor_obs = build_discoveryworld_anchor_obs(text_obs, infos, self.memory, self.config)
         next_observations = {"text": full_text_obs, "image": None, "anchor": anchor_obs}
         rewards = to_numpy(rewards)
         dones = to_numpy(dones)
@@ -707,185 +730,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 success["success_rate"].append(float(info["won"]))
                 success["eval_seed"].append(int(info["seed"]))
                 return
-
-    def _chemical_counts(self, chemical_dict: Dict[str, Any]) -> Dict[str, int]:
-        chemical_dict = chemical_dict or {}
-        return {chemical: int(chemical_dict.get(chemical, 0) or 0) for chemical in ("A", "B", "C", "D")}
-
-    def _chemical_counts_text(self, chemical_dict: Dict[str, Any]) -> str:
-        counts = self._chemical_counts(chemical_dict)
-        return ",".join(f"{chemical}={counts[chemical]}" for chemical in ("A", "B", "C", "D"))
-
-    def _chemical_tuple_text(self, chemical_dict: Dict[str, Any]) -> str:
-        counts = self._chemical_counts(chemical_dict)
-        return "(" + ",".join(str(counts[chemical]) for chemical in ("A", "B", "C", "D")) + ")"
-
-    def _rust_change_text(self, previous_level: Any, current_level: Any) -> str:
-        from agent_system.environments.env_package.discovery.utils import RUST_LABEL_TO_LEVEL, format_rust_level
-
-        previous_label = format_rust_level(previous_level)
-        current_label = format_rust_level(current_level)
-        previous_value = RUST_LABEL_TO_LEVEL.get(previous_label)
-        current_value = RUST_LABEL_TO_LEVEL.get(current_label)
-        if previous_value is None or current_value is None:
-            return f"{previous_label} -> {current_label}"
-        if current_value < previous_value:
-            change = "improved"
-        elif current_value > previous_value:
-            change = "worsened"
-        else:
-            change = "no change"
-        return f"{previous_label} -> {current_label} ({change})"
-
-    def _is_chemical_action(self, action: Any) -> bool:
-        action_text = str(action or "")
-        return (
-            action_text.startswith("use_dispenser_")
-            or action_text.startswith("remove_chemical_")
-            or action_text == "wash_jar"
-        )
-
-    def build_chemical_belief(self, item: int, info: Dict[str, Any], max_records: int = 16) -> str:
-        records = self.memory[item] if item < len(self.memory) else []
-        valid_rust_levels = {
-            "heavily rusted",
-            "moderately rusted",
-            "lightly rusted",
-            "no rust",
-        }
-        max_records = max(int(max_records), 0)
-
-        # Dict insertion order keeps the observations chronological. Re-observing
-        # a combination moves it to the end so the prompt contains its latest
-        # result and the most recently relevant combinations.
-        combo_results: Dict[Tuple[int, int, int, int], str] = {}
-        for record in records:
-            post_combo = self._chemical_counts(record.get("post_chemical_dict"))
-            rust_status = str(record.get("rust_status") or "").strip().lower()
-            if rust_status not in valid_rust_levels:
-                continue
-            combo_tuple = tuple(post_combo[chemical] for chemical in ("A", "B", "C", "D"))
-            combo_results.pop(combo_tuple, None)
-            combo_results[combo_tuple] = rust_status
-
-        current_combo = self._chemical_counts(info.get("chemical_dict"))
-        current_rust = str(info.get("key_rust_status") or "").strip().lower()
-        if current_rust in valid_rust_levels:
-            current_tuple = tuple(current_combo[chemical] for chemical in ("A", "B", "C", "D"))
-            combo_results.pop(current_tuple, None)
-            combo_results[current_tuple] = current_rust
-
-        if max_records == 0 or not combo_results:
-            return "No chemical combination has been observed yet."
-
-        recent_results = list(combo_results.items())[-max_records:]
-        return "\n".join(
-            f"{self._chemical_tuple_text(dict(zip(('A', 'B', 'C', 'D'), combo)))} -> {rust_status}"
-            for combo, rust_status in recent_results
-        )
-
-    def build_anchor_obs(self, text_obs: List[str], infos: List[Dict[str, Any]]) -> List[str]:
-        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-        anchor_mode = str(getattr(discovery_cfg, "anchor_mode", "belief_summary")).strip().lower()
-        max_records = int(getattr(discovery_cfg, "belief_history_length", 16))
-
-        anchors: List[str] = []
-        for i, obs in enumerate(text_obs):
-            if anchor_mode in {"raw", "raw_obs", "text_obs"}:
-                anchors.append(obs)
-                continue
-
-            info = infos[i]
-            state_summary = {
-                "state_obs": obs,
-                "chemical_dict": self._chemical_counts(info.get("chemical_dict")),
-                "key_rust_status": str(info.get("key_rust_status") or "unknown").strip().lower(),
-                "has_key": bool(info.get("has_key")),
-                "has_jar": bool(info.get("has_jar")),
-                "is_key_in_jar": bool(info.get("is_key_in_jar")),
-                "used_dispensers": {
-                    key: bool(value)
-                    for key, value in sorted((info.get("used_dispensers") or {}).items())
-                },
-            }
-            if anchor_mode in {"state", "state_summary"}:
-                anchors.append(json.dumps(state_summary, sort_keys=True))
-                continue
-
-            state_summary["chemical_belief"] = self.build_chemical_belief(i, info, max_records=max_records)
-            anchors.append(json.dumps(state_summary, sort_keys=True))
-        return anchors
-
-    def build_text_obs(self, text_obs: List[str], infos: List[Dict[str, Any]], init: bool = False) -> List[str]:
-        from agent_system.environments.env_package.discovery.utils import (
-            format_rust_update,
-            get_valid_discoveryworld_skills,
-        )
-        from agent_system.environments.prompts.discoveryworld import format_current_chemicals, format_key_status
-        
-        postprocess_text_obs: List[str] = []
-        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-        max_chemical_n = getattr(discovery_cfg, "max_chemical_n", getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)))
-
-        for i in range(len(text_obs)):
-            state_obs = text_obs[i]
-            state_obs = state_obs.replace("\\n", "\n")
-            step_info = f"Step: {len(self.memory[i])} / {self.config.env.max_steps}"
-            chemical_state = format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n)
-            key_state = format_key_status(infos[i].get("key_rust_status"))
-            chemical_belief = self.build_chemical_belief(
-                i,
-                infos[i],
-                max_records=int(self.config.env.history_length),
-            )
-            valid_skill_names = get_valid_discoveryworld_skills(infos[i], max_chemical_n=max_chemical_n)
-            infos[i]["valid_skills"] = list(valid_skill_names)
-            valid_skills = "\n".join(valid_skill_names)
-            in_chemical_stage = bool(infos[i].get("is_key_in_jar"))
-            if init or in_chemical_stage or self.config.env.history_length <= 0 or len(self.memory[i]) == 0:
-                obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(
-                    max_chemical_n=max_chemical_n,
-                    chemical_state=chemical_state,
-                    key_state=key_state,
-                    state_obs=state_obs,
-                    step_info=step_info,
-                    chemical_belief=chemical_belief,
-                    valid_skills=valid_skills,
-                )
-            else:
-                recent_records = self.memory[i][-self.config.env.history_length:]
-                history_start_index = len(self.memory[i]) - len(recent_records)
-
-                if history_start_index > 0 and len(self.memory[i]) > len(recent_records):
-                    previous_rust_level = self.memory[i][history_start_index - 1].get("rust_level")
-                else:
-                    previous_rust_level = None
-
-                memory_lines = []
-                for step_offset, record in enumerate(recent_records):
-                    action = record.get("action")
-                    rust_level = record.get("rust_level")
-                    if not action:
-                        continue
-                    rust_update = format_rust_update(previous_rust_level, rust_level)
-                    memory_lines.append(f"{step_offset + 1}. {action} -> {rust_update}")
-                    previous_rust_level = rust_level
-
-                memory_actions = "\n".join(memory_lines)
-                obs = DISCOVERYWORLD_TEMPLATE.format(
-                    max_chemical_n=max_chemical_n,
-                    chemical_state=chemical_state,
-                    key_state=key_state,
-                    state_obs=state_obs,
-                    step_info=step_info,
-                    memory_actions=memory_actions,
-                    chemical_belief=chemical_belief,
-                    valid_skills=valid_skills,
-                )
-            postprocess_text_obs.append(obs)
-
-        return postprocess_text_obs
-
 
 def make_envs(config):
     """
@@ -997,7 +841,7 @@ def make_envs(config):
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
         target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
-        teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 1.0)
+        teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 0.1)
         env_variant = getattr(discovery_cfg, "env_variant", "original")
         train_seed_pool = getattr(discovery_cfg, "train_seed_pool", None)
         eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)

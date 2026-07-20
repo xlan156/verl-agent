@@ -1,13 +1,20 @@
 from typing import Dict, Any, List, Tuple, Optional
+import itertools
+import json
 import re
+
+from agent_system.environments.prompts.discoveryworld import (
+    DISCOVERYWORLD_TEMPLATE,
+    DISCOVERYWORLD_TEMPLATE_NO_HIS,
+    format_current_chemicals,
+    format_key_status,
+)
 
 from agent_system.environments.env_package.discovery.config import (
     build_frames_dir,
     coerce_max_chemical_n,
     slugify,
 )
-
-
 all_plausible_action_json = [
     {"action": "PICKUP", "arg1": "33120"},
     {"action": "MOVE_DIRECTION", "arg1": "west"},
@@ -467,3 +474,372 @@ def is_remove_skill(skill_name: Optional[str]) -> bool:
         isinstance(skill_name, str)
         and skill_name.startswith("remove_chemical_")
     )
+
+
+CHEMICAL_NAMES = ("A", "B", "C", "D")
+
+
+def canonical_chemical_belief(
+    current_mixture: Tuple[int, ...],
+    current_reaction_signal: str,
+    candidate_targets: List[Tuple[int, ...]],
+) -> Tuple[Tuple[int, ...], str, Tuple[Tuple[int, ...], ...]]:
+    """Return the exact structured key used by the chemical-stage anchor."""
+    return (
+        tuple(int(value) for value in current_mixture),
+        str(current_reaction_signal or "not tested").strip().lower(),
+        tuple(sorted(tuple(int(value) for value in target) for target in candidate_targets)),
+    )
+
+
+def chemical_counts(chemical_dict: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    chemical_dict = chemical_dict or {}
+    return {name: int(chemical_dict.get(name, 0) or 0) for name in CHEMICAL_NAMES}
+
+
+def chemical_tuple_text(chemical_dict: Optional[Dict[str, Any]]) -> str:
+    counts = chemical_counts(chemical_dict)
+    return "(" + ",".join(str(counts[name]) for name in CHEMICAL_NAMES) + ")"
+
+
+def similarity_bucket_for_tuples(
+    mixture: Tuple[int, int, int, int],
+    target: Tuple[int, int, int, int],
+) -> Optional[str]:
+    mixture_norm = sum(value * value for value in mixture) ** 0.5
+    target_norm = sum(value * value for value in target) ** 0.5
+    if mixture_norm == 0 or target_norm == 0:
+        return None
+    similarity = sum(left * right for left, right in zip(mixture, target)) / (
+        mixture_norm * target_norm
+    )
+    if similarity >= 0.99:
+        return "no rust"
+    if similarity >= 0.66:
+        return "lightly rusted"
+    if similarity >= 0.33:
+        return "moderately rusted"
+    return "heavily rusted"
+
+
+RUST_TO_REACTION_SIGNAL = {
+    "no rust": "successful",
+    "lightly rusted": "strong",
+    "moderately rusted": "weak",
+    "heavily rusted": "none",
+}
+REACTION_SIGNAL_TO_RUST = {value: key for key, value in RUST_TO_REACTION_SIGNAL.items()}
+
+
+def reaction_signal_for_tuples(
+    mixture: Tuple[int, int, int, int],
+    target: Tuple[int, int, int, int],
+) -> str:
+    """Return a reversible, coarse assay reading for the current mixture."""
+    rust_bucket = similarity_bucket_for_tuples(mixture, target)
+    return RUST_TO_REACTION_SIGNAL.get(rust_bucket, "not tested")
+
+
+def candidate_targets(
+    combo_results: Dict[Tuple[int, int, int, int], Tuple[str, str]],
+    required_amount: int,
+) -> List[Tuple[int, int, int, int]]:
+    candidates = (
+        tuple(values)
+        for values in itertools.product(range(required_amount + 1), repeat=4)
+        if sum(values) == required_amount
+    )
+    return [
+        candidate
+        for candidate in candidates
+        if all(
+            _candidate_matches_evidence(mixture, candidate, kind, label)
+            for mixture, (kind, label) in combo_results.items()
+        )
+    ]
+
+
+def _candidate_matches_evidence(
+    mixture: Tuple[int, int, int, int],
+    candidate: Tuple[int, int, int, int],
+    kind: str,
+    label: str,
+) -> bool:
+    label = REACTION_SIGNAL_TO_RUST.get(label, label)
+    predicted = similarity_bucket_for_tuples(mixture, candidate)
+    if predicted is None or label not in RUST_LABEL_TO_LEVEL:
+        return False
+    if kind == "observed":
+        return predicted == label
+    if kind == "not_better_than":
+        return RUST_LABEL_TO_LEVEL[predicted] >= RUST_LABEL_TO_LEVEL[label]
+    return False
+
+
+def observable_experiment_evidence(
+    previous_info: Dict[str, Any],
+    current_info: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    """Build exact evidence from the reversible, agent-visible reaction assay."""
+    current_combo = chemical_counts(current_info.get("chemical_dict"))
+    combo = tuple(current_combo[name] for name in CHEMICAL_NAMES)
+    if not current_info.get("is_key_in_jar") or not any(combo):
+        return None
+
+    previous_combo = chemical_counts(previous_info.get("chemical_dict"))
+    previous_tuple = tuple(previous_combo[name] for name in CHEMICAL_NAMES)
+    newly_tested = not previous_info.get("is_key_in_jar") or combo != previous_tuple
+    if not newly_tested:
+        return None
+
+    current_signal = str(current_info.get("current_reaction_signal") or "").strip().lower()
+    if current_signal not in REACTION_SIGNAL_TO_RUST:
+        return None
+    return {"kind": "observed", "label": current_signal}
+
+
+def collect_experiment_evidence(
+    records: List[Dict[str, Any]],
+) -> Dict[Tuple[int, int, int, int], Tuple[str, str]]:
+    results: Dict[Tuple[int, int, int, int], Tuple[str, str]] = {}
+    for record in records:
+        kind = str(record.get("experiment_evidence_kind") or "")
+        label = str(record.get("experiment_evidence_label") or "").strip().lower()
+        if label in RUST_LABEL_TO_LEVEL:  # Backward-compatible old rollout records.
+            label = RUST_TO_REACTION_SIGNAL[label]
+        if kind not in {"observed", "not_better_than"} or label not in REACTION_SIGNAL_TO_RUST:
+            continue
+        combo_counts = chemical_counts(record.get("post_chemical_dict"))
+        combo = tuple(combo_counts[name] for name in CHEMICAL_NAMES)
+        results.pop(combo, None)
+        results[combo] = (kind, label)
+    return results
+
+
+_CHEMICAL_SKILL_DELTAS = {
+    USE_DISPENSER_A: (0, 1),
+    USE_DISPENSER_B: (1, 1),
+    USE_DISPENSER_C: (2, 1),
+    USE_DISPENSER_D: (3, 1),
+    REMOVE_CHEMICAL_A: (0, -1),
+    REMOVE_CHEMICAL_B: (1, -1),
+    REMOVE_CHEMICAL_C: (2, -1),
+    REMOVE_CHEMICAL_D: (3, -1),
+}
+
+
+def chemical_state_after_skill(
+    chemical_dict: Optional[Dict[str, Any]],
+    skill_name: str,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Return the one-step chemical state implied by a use/remove skill."""
+    delta = _CHEMICAL_SKILL_DELTAS.get(skill_name)
+    if delta is None:
+        return None
+    counts = chemical_counts(chemical_dict)
+    state = [counts[name] for name in CHEMICAL_NAMES]
+    index, amount = delta
+    state[index] += amount
+    if state[index] < 0:
+        return None
+    return tuple(state)
+
+
+def filter_observed_chemical_skills(
+    valid_skills: List[str],
+    info: Dict[str, Any],
+    records: List[Dict[str, Any]],
+) -> Tuple[List[str], Dict[str, Tuple[int, int, int, int]]]:
+    """Remove chemical edges whose destination was already assayed.
+
+    If every chemical edge is exhausted, expose ``wash_jar`` as a non-edge
+    escape action instead of advertising a known repeated experiment.
+    """
+    if not info.get("is_key_in_jar"):
+        return list(valid_skills), {}
+    observed_states = set(collect_experiment_evidence(records))
+    if not observed_states:
+        return list(valid_skills), {}
+
+    kept: List[str] = []
+    filtered: Dict[str, Tuple[int, int, int, int]] = {}
+    for skill_name in valid_skills:
+        next_state = chemical_state_after_skill(info.get("chemical_dict"), skill_name)
+        if next_state is not None and next_state in observed_states:
+            filtered[skill_name] = next_state
+        else:
+            kept.append(skill_name)
+
+    if not kept and filtered:
+        kept = [WASH]
+    return kept, filtered
+
+
+def build_chemical_belief_state(
+    records: List[Dict[str, Any]],
+    info: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build a structured belief solely from the complete visible experiment log."""
+    evidence = collect_experiment_evidence(records)
+    required_amount = int(info.get("max_chemical_n", 0) or 0)
+    remaining = candidate_targets(evidence, required_amount) if required_amount > 0 else []
+
+    experiments = []
+    for record in records:
+        kind = str(record.get("experiment_evidence_kind") or "")
+        label = str(record.get("experiment_evidence_label") or "").strip().lower()
+        if label in RUST_LABEL_TO_LEVEL:
+            label = RUST_TO_REACTION_SIGNAL[label]
+        if kind not in {"observed", "not_better_than"} or label not in REACTION_SIGNAL_TO_RUST:
+            continue
+        combo_counts = chemical_counts(record.get("post_chemical_dict"))
+        experiments.append({
+            "mixture": [combo_counts[name] for name in CHEMICAL_NAMES],
+            "reaction_signal": label,
+        })
+    return {
+        "experiments": experiments,
+        "candidate_count": len(remaining),
+        "candidate_targets": [list(target) for target in remaining],
+    }
+
+
+def build_chemical_belief(
+    records: List[Dict[str, Any]],
+    info: Dict[str, Any],
+    max_records: Optional[int] = None,
+) -> str:
+    """Format the complete structured belief for the policy prompt."""
+    belief = build_chemical_belief_state(records, info)
+
+    sections = []
+    if belief["experiments"]:
+        lines = [
+            f"({','.join(map(str, experiment['mixture']))}) -> {experiment['reaction_signal']}"
+            for experiment in belief["experiments"]
+        ]
+        sections.append("Experiments:\n" + "\n".join(lines))
+    else:
+        sections.append("No chemical combination has been observed yet.")
+
+    remaining_text = ", ".join(
+        f"({','.join(map(str, target))})" for target in belief["candidate_targets"]
+    )
+    sections.append(
+        f"Remaining candidate targets ({belief['candidate_count']}): "
+        + (remaining_text or "none")
+    )
+    return "\n".join(sections)
+
+
+def build_discoveryworld_anchor_obs(
+    text_obs: List[str],
+    infos: List[Dict[str, Any]],
+    memory: Any,
+    config: Any,
+) -> List[str]:
+    discovery_cfg = getattr(config.env, "discoveryworld", None)
+    anchor_mode = str(getattr(discovery_cfg, "anchor_mode", "belief_summary")).strip().lower()
+    anchors = []
+    for i, obs in enumerate(text_obs):
+        if anchor_mode in {"raw", "raw_obs", "text_obs"}:
+            anchors.append(obs)
+            continue
+        info = infos[i]
+        records = memory[i] if i < len(memory) else []
+        if info.get("is_key_in_jar"):
+            belief = build_chemical_belief_state(records, info)
+            counts = chemical_counts(info.get("chemical_dict"))
+            canonical = canonical_chemical_belief(
+                [counts[name] for name in CHEMICAL_NAMES],
+                info.get("current_reaction_signal", "not tested"),
+                belief["candidate_targets"],
+            )
+            anchors.append(json.dumps({
+                "current_mixture": list(canonical[0]),
+                "current_reaction_signal": canonical[1],
+                "candidate_targets": [list(target) for target in canonical[2]],
+            }, sort_keys=True))
+            continue
+        state_summary = {
+            "state_obs": obs,
+            "chemical_dict": chemical_counts(info.get("chemical_dict")),
+            "key_rust_status": str(info.get("key_rust_status") or "unknown").strip().lower(),
+            "current_reaction_signal": str(
+                info.get("current_reaction_signal") or "not tested"
+            ).strip().lower(),
+            "has_key": bool(info.get("has_key")),
+            "has_jar": bool(info.get("has_jar")),
+            "is_key_in_jar": bool(info.get("is_key_in_jar")),
+            "used_dispensers": {
+                key: bool(value)
+                for key, value in sorted((info.get("used_dispensers") or {}).items())
+            },
+        }
+        if anchor_mode not in {"state", "state_summary"}:
+            state_summary["chemical_belief"] = build_chemical_belief_state(records, info)
+        anchors.append(json.dumps(state_summary, sort_keys=True))
+    return anchors
+
+
+def build_discoveryworld_text_obs(
+    text_obs: List[str],
+    infos: List[Dict[str, Any]],
+    memory: Any,
+    config: Any,
+    init: bool = False,
+) -> List[str]:
+    discovery_cfg = getattr(config.env, "discoveryworld", None)
+    max_chemical_n = getattr(
+        discovery_cfg,
+        "max_chemical_n",
+        getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)),
+    )
+    results = []
+    for i, raw_obs in enumerate(text_obs):
+        records = memory[i] if i < len(memory) else []
+        state_obs = raw_obs.replace("\\n", "\n")
+        template_args = {
+            "max_chemical_n": max_chemical_n,
+            "chemical_state": format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n),
+            "key_state": format_key_status(infos[i].get("key_rust_status")),
+            "reaction_signal": str(
+                infos[i].get("current_reaction_signal") or "not tested"
+            ).strip().lower(),
+            "state_obs": state_obs,
+            "step_info": f"Step: {len(records)} / {config.env.max_steps}",
+            "chemical_belief": build_chemical_belief(records, infos[i]),
+        }
+        valid_skill_names = get_valid_discoveryworld_skills(
+            infos[i], max_chemical_n=max_chemical_n
+        )
+        valid_skill_names, filtered_revisits = filter_observed_chemical_skills(
+            valid_skill_names, infos[i], records
+        )
+        infos[i]["valid_skills"] = list(valid_skill_names)
+        infos[i]["filtered_revisit_skills"] = {
+            skill_name: list(state)
+            for skill_name, state in filtered_revisits.items()
+        }
+        template_args["valid_skills"] = "\n".join(valid_skill_names)
+        in_chemical_stage = bool(infos[i].get("is_key_in_jar"))
+        if init or in_chemical_stage or config.env.history_length <= 0 or not records:
+            obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(**template_args)
+        else:
+            recent_records = records[-config.env.history_length:]
+            history_start = len(records) - len(recent_records)
+            previous_rust_level = records[history_start - 1].get("rust_level") if history_start > 0 else None
+            memory_lines = []
+            for step_offset, record in enumerate(recent_records):
+                action = record.get("action")
+                rust_level = record.get("rust_level")
+                if not action:
+                    continue
+                memory_lines.append(
+                    f"{step_offset + 1}. {action} -> {format_rust_update(previous_rust_level, rust_level)}"
+                )
+                previous_rust_level = rust_level
+            template_args["memory_actions"] = "\n".join(memory_lines)
+            obs = DISCOVERYWORLD_TEMPLATE.format(**template_args)
+        results.append(obs)
+    return results

@@ -27,6 +27,9 @@ from agent_system.environments.env_package.discovery.utils import (
     compress_ui_observation,
     extract_detailed_status,
     format_rust_level,
+    is_dispenser_skill,
+    is_remove_skill,
+    reaction_signal_for_tuples,
 )
 
 
@@ -34,17 +37,17 @@ logger = logging.getLogger(__name__)
 
 
 def _solution_dict_to_state(solution: Dict[str, int]) -> Tuple[int, ...]:
-    aliases = {
-        "A": ("A", "Chemical A", "Substance A"),
-        "B": ("B", "Chemical B", "Substance B"),
-        "C": ("C", "Chemical C", "Substance C"),
-        "D": ("D", "Chemical D", "Substance D"),
-    }
-    normalized = {
-        canonical: int(next((solution[name] for name in names if name in solution), 0))
-        for canonical, names in aliases.items()
-    }
-    return tuple(normalized[name] for name in aliases)
+    """Convert DiscoveryWorld's ``Substance X`` keys to the public A-D state."""
+    return tuple(
+        int(
+            solution.get(
+                name,
+                solution.get(f"Chemical {name}", solution.get(f"Substance {name}", 0)),
+            )
+            or 0
+        )
+        for name in ("A", "B", "C", "D")
+    )
 
 
 class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
@@ -59,7 +62,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         save_frames: bool = False,
         frames_dir: Optional[str] = None,
         max_chemical_n: Optional[int] = None,
-        teacher_skill_reward_coef: float = 1.0,
+        teacher_skill_reward_coef: float = 0.1,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -70,8 +73,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._frames_dir = frames_dir
         self._max_chemical_n = int(max_chemical_n) if max_chemical_n is not None else 2
         self._teacher_skill_reward_coef = float(teacher_skill_reward_coef)
-        self._chemical_solution_state: Optional[Tuple[int, ...]] = None
-
+        self._hidden_chemical_target: Optional[Tuple[int, ...]] = None
         self._api: Optional[DiscoveryWorldAPI] = None
         self._steps: int = 0
         self._prev_score: float = 0.0
@@ -103,21 +105,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
                 f"difficulty='{self._difficulty}'"
             )
 
-    def _get_chemical_solution_state(self) -> Optional[Tuple[int, ...]]:
-        assert self._api is not None
-        world = getattr(self._api, "world", None)
-        if world is None:
-            return None
-
-        task_scorer = getattr(world, "taskScorer", None)
-        tasks = getattr(task_scorer, "tasks", None) or []
-        for task in tasks:
-            scoring_info = getattr(task, "scoringInfo", None) or {}
-            chemical_solution = scoring_info.get("chemicalSolutionDict")
-            if chemical_solution is not None:
-                return _solution_dict_to_state(chemical_solution)
-        return None
-
     def init_reward_shaping(self):
 
         self.action_history: List[Optional[str]] = []
@@ -127,8 +114,20 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self.teacher = RulebasedAgentSkill(self)
         self._last_teacher_skill: Optional[str] = None
         self._last_info: Optional[Dict[str, Any]] = None
+        self._chemical_evidence: Dict[Tuple[int, int, int, int], Tuple[str, str]] = {}
 
         self.used_dispensers = {"A": False, "B": False, "C": False, "D": False}
+
+    def _read_hidden_chemical_target(self) -> Optional[Tuple[int, ...]]:
+        """Read the simulator-only target without exposing it in observations."""
+        world = getattr(self._api, "world", None)
+        if world is None:
+            return None
+        for obj in world.getAllWorldObjects():
+            target = (getattr(obj, "attributes", None) or {}).get("rustRemovalDict")
+            if target:
+                return _solution_dict_to_state(target)
+        return None
 
     def _score_normalized(self) -> float:
         assert self._api is not None
@@ -157,7 +156,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             "last_action_result": self._last_action_result,
             "score_normalized": self._score_normalized(),
             "train_epoch": self.train_epoch,
-            "chemical_solution_state": self._chemical_solution_state,
             "max_chemical_n": self._max_chemical_n,
         }
 
@@ -187,6 +185,13 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         info["key_is_rusted"] = (
             None if key_rust_level is None else key_rust_level != "no rust"
         )
+        mixture = tuple(int(chemical_dict.get(name, 0) or 0) for name in ("A", "B", "C", "D"))
+        if is_key_in_jar and any(mixture) and self._hidden_chemical_target is not None:
+            info["current_reaction_signal"] = reaction_signal_for_tuples(
+                mixture, self._hidden_chemical_target
+            )
+        else:
+            info["current_reaction_signal"] = "not tested"
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
         """Reset environment and return initial observation and info."""
@@ -196,8 +201,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._last_action_result = None
 
         self.init_reward_shaping()
-        self._chemical_solution_state = self._get_chemical_solution_state()
-
+        self._hidden_chemical_target = self._read_hidden_chemical_target()
         text_obs, info = self._format_obs_and_info()
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_state_from_info(info)
@@ -210,7 +214,11 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         
         return text_obs, info
 
-    def step(self, action: Any, format_score: float = 0.0) -> Tuple[str, float, bool, Dict[str, Any]]:
+    def step(
+        self,
+        action: Any,
+        format_score: float = 0.0,
+    ) -> Tuple[str, float, bool, Dict[str, Any]]:
         """Execute one step: validate action, execute if valid, compute reward."""
         assert self._api is not None
 
@@ -235,7 +243,9 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             info["executed_action"] = None
             self._update_state_from_info(info)
             
-            reward, done = self._compute_step_reward(None, info, format_score=format_score)
+            reward, done = self._compute_step_reward(
+                None, info, format_score=format_score,
+            )
             self._last_info = deepcopy(info)
             return text_obs, reward, done, info
 
@@ -249,6 +259,12 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
                 raise ValueError(f"Unknown skill: {skill_name}")
 
             skill_fn()
+            # A dispenser tick updates the jar's Substance mixture after the
+            # key has already evaluated it. Settle once more before exposing
+            # the transition so the returned rust state describes the action
+            # that was just executed, rather than the preceding mixture.
+            if is_dispenser_skill(skill_name) or is_remove_skill(skill_name):
+                self._skill_runner.settle_reactions(max_ticks=1)
             self.action_history.append(skill_name)
             success = bool((self._last_action_result or {}).get("success", False))
             action_status = "success" if success else "valid_but_failed"
@@ -266,9 +282,11 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         info["action_status"] = action_status
         self._update_state_from_info(info)
         
-        reward, done = self._compute_step_reward(skill_name, info, format_score=format_score)
+        reward, done = self._compute_step_reward(
+            skill_name, info, format_score=format_score
+        )
         self._last_info = deepcopy(info)
-        
+
         return text_obs, reward, done, info
 
     def close(self) -> None:
@@ -306,8 +324,14 @@ class DiscoveryWorldWorker:
         info["seed"] = self._seed
         return obs, info
 
-    def step(self, action: Any, format_score: float = 0.0) -> Tuple[str, float, bool, Dict[str, Any]]:
-        obs, reward, done, info = self._env.step(action, format_score=format_score)
+    def step(
+        self,
+        action: Any,
+        format_score: float = 0.0,
+    ) -> Tuple[str, float, bool, Dict[str, Any]]:
+        obs, reward, done, info = self._env.step(
+            action, format_score=format_score
+        )
         info["seed"] = self._seed
         return obs, reward, done, info
 
@@ -318,7 +342,6 @@ class DiscoveryWorldWorker:
         return {
             "seed": self._seed,
             "thread_id": self._thread_id,
-            "chemical_solution_state": self._env._chemical_solution_state,
             "max_chemical_n": self._env._max_chemical_n,
             "scenario_name": self._env._scenario_name,
             "difficulty": self._env._difficulty,
@@ -347,6 +370,7 @@ class DiscoveryWorldVectorEnv:
         self.is_train = coerce_bool(is_train, default=True)
 
         self._workers: List[Any] = []
+        self._worker_seeds: List[int] = []
         self._max_chemical_n = coerce_max_chemical_n(env_kwargs)
         self._target_train_fraction = float(env_kwargs.get("target_train_fraction", 0.8))
         self._env_variant = str(env_kwargs.get("env_variant", "original")).strip().lower()
@@ -405,6 +429,14 @@ class DiscoveryWorldVectorEnv:
             worker_env_kwargs["max_chemical_n"] = goal_stage
             worker = env_worker.remote(seed=worker_seed, env_kwargs=worker_env_kwargs, thread_id=i)
             self._workers.append(worker)
+            self._worker_seeds.append(worker_seed)
+
+        # GRPO/GiGPO relative advantages are only meaningful when every
+        # replica in a group faces the same latent target.
+        for group_start in range(0, self.num_processes, self.group_n):
+            group_seeds = self._worker_seeds[group_start : group_start + self.group_n]
+            if len(set(group_seeds)) != 1:
+                raise RuntimeError(f"Mixed hidden targets in rollout group: {group_seeds}")
 
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -468,7 +500,9 @@ class DiscoveryWorldVectorEnv:
         info_list: List[Dict[str, Any]] = []
 
         futures = []
-        for worker, act, format_score in zip(self._workers, actions, format_scores):
+        for worker, act, format_score in zip(
+            self._workers, actions, format_scores
+        ):
             future = worker.step.remote(act, float(format_score))
             futures.append(future)
 
