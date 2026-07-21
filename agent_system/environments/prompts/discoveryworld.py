@@ -43,7 +43,7 @@ When key is no rust, you can choose to open the door.
 [RESPONSE]
 Return exactly this format and no other text:
 <think>
-one short state-based reason
+one short state-based reason explaining the chosen action; do not merely restate the task
 </think>
 <action>
 one valid skill name
@@ -77,7 +77,7 @@ When key is no rust, you can choose to open the door.
 [RESPONSE]
 Return exactly this format and no other text:
 <think>
-one short state-based reason
+one short state-based reason explaining the chosen action; do not merely restate the task
 </think>
 <action>
 one valid skill name

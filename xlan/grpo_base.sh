@@ -63,6 +63,7 @@ TRAIN_SEED_POOL="${TRAIN_SEED_POOL:-null}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-${ENV_VARIANT:-original}}"
 SAVE_FRAMES="${SAVE_FRAMES:-False}"
 TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-0.1}"
+THINKING_REWARD_COEF="${THINKING_REWARD_COEF:-0.2}"
 
 # Trainer, logging, and checkpoints
 PROJECT_NAME="${PROJECT_NAME:-GRPO-discoveryworld}"
@@ -150,6 +151,7 @@ ENVIRONMENT=(
     "+env.discoveryworld.save_frames=${SAVE_FRAMES}"
     "+env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N}"
     "+env.discoveryworld.teacher_skill_reward_coef=${TEACHER_REWARD_COEF}"
+    "+env.discoveryworld.thinking_reward_coef=${THINKING_REWARD_COEF}"
     "+env.discoveryworld.train_seed_pool=${TRAIN_SEED_POOL}"
     "env.resources_per_worker.num_cpus=${NUM_CPUS_PER_ENV_WORKER}"
 )

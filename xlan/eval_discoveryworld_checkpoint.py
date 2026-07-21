@@ -71,16 +71,32 @@ def parse_args() -> argparse.Namespace:
         default="val",
         help="Evaluate seeds from the curriculum-disabled validation or training pool",
     )
+    parser.add_argument(
+        "--eval-seeds",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Explicit environment seed(s) from --eval-split; overrides --eval-size",
+    )
     parser.add_argument("--rollouts-per-seed", type=int, default=5)
     parser.add_argument("--max-chemical-n", type=int, default=2)
     parser.add_argument("--target-train-fraction", type=float, default=0.8)
     parser.add_argument("--max-steps", type=int, default=30)
+    parser.add_argument("--max-response-length", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.4)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--env-variant", default="original")
     parser.add_argument("--seed", type=int, default=0, help="Policy sampling seed; environment seeds come from --eval-split")
     parser.add_argument("--num-gpus", type=int, default=1)
     parser.add_argument("--num-cpus-per-env", type=float, default=0.1)
+    parser.add_argument("--project-name", default="Combinatorial-Chemistry-Agent")
+    parser.add_argument("--experiment-name", default="checkpoint-eval")
+    parser.add_argument(
+        "--log-llm-steps",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Log every evaluation environment step to the W&B eval/llm_steps table",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON summary path")
     args = parser.parse_args()
     if args.eval_size <= 0 or args.rollouts_per_seed <= 0:
@@ -99,13 +115,24 @@ def main() -> None:
         train_fraction=args.target_train_fraction,
     )
     full_eval_pool = pools[args.max_chemical_n][args.eval_split]
-    if args.eval_size > len(full_eval_pool):
+    if args.eval_seeds is None and args.eval_size > len(full_eval_pool):
         raise ValueError(
             f"eval_size={args.eval_size} exceeds the fixed {args.eval_split} pool size "
             f"{len(full_eval_pool)}: {full_eval_pool}"
         )
 
-    selected_seeds = full_eval_pool[: args.eval_size]
+    if args.eval_seeds is not None:
+        invalid_seeds = [seed for seed in args.eval_seeds if seed not in full_eval_pool]
+        if invalid_seeds:
+            raise ValueError(
+                f"Explicit eval seeds {invalid_seeds} are not in the fixed {args.eval_split} "
+                f"pool: {full_eval_pool}"
+            )
+        if len(set(args.eval_seeds)) != len(args.eval_seeds):
+            raise ValueError(f"--eval-seeds contains duplicates: {args.eval_seeds}")
+        selected_seeds = args.eval_seeds
+    else:
+        selected_seeds = full_eval_pool[: args.eval_size]
     total_episodes = len(selected_seeds) * args.rollouts_per_seed
 
     config_dir = str((Path(__file__).resolve().parents[1] / "verl/trainer/config").resolve())
@@ -120,7 +147,7 @@ def main() -> None:
             cfg.data.train_batch_size = total_episodes
             cfg.data.val_batch_size = total_episodes
             cfg.data.max_prompt_length = 2048
-            cfg.data.max_response_length = 256
+            cfg.data.max_response_length = args.max_response_length
             cfg.data.return_raw_chat = True
             cfg.actor_rollout_ref.model.path = args.model_path
             cfg.actor_rollout_ref.model.use_remove_padding = True
@@ -157,7 +184,9 @@ def main() -> None:
                 "env_variant": args.env_variant,
                 "save_frames": False,
             }
-            cfg.trainer.logger = ["console"]
+            cfg.trainer.logger = ["console", "wandb"] if args.log_llm_steps else ["console"]
+            cfg.trainer.project_name = args.project_name
+            cfg.trainer.experiment_name = args.experiment_name
             cfg.trainer.n_gpus_per_node = args.num_gpus
             cfg.trainer.nnodes = 1
             cfg.trainer.val_before_train = True
@@ -165,7 +194,8 @@ def main() -> None:
             cfg.trainer.resume_mode = "resume_path"
             cfg.trainer.resume_from_path = str(checkpoint)
             cfg.trainer.save_best_val_success = False
-            cfg.trainer.log_llm_steps = False
+            cfg.trainer.log_eval_steps = args.log_llm_steps
+            cfg.trainer.log_llm_steps = args.log_llm_steps
             cfg.ray_init.address = "auto" if "RAY_ADDRESS" in __import__("os").environ else None
 
         metrics = run_ppo(cfg)
@@ -198,10 +228,14 @@ def main() -> None:
             "max_chemical_n": args.max_chemical_n,
             "target_train_fraction": args.target_train_fraction,
             "max_steps": args.max_steps,
+            "max_response_length": args.max_response_length,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "do_sample": True,
             "policy_sampling_seed": args.seed,
+            "log_llm_steps": args.log_llm_steps,
+            "wandb_project": args.project_name if args.log_llm_steps else None,
+            "wandb_experiment": args.experiment_name if args.log_llm_steps else None,
             "vllm_gpu_memory_utilization": 0.6,
         },
     }

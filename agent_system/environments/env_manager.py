@@ -656,6 +656,29 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
         from agent_system.environments.env_package.discovery.projection import response_format_score
+        from agent_system.environments.env_package.discovery.rewards import (
+            combine_task_and_thinking_reward,
+            score_thinking,
+        )
+
+        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
+        thinking_reward_coef = float(getattr(discovery_cfg, "thinking_reward_coef", 0.2))
+        pre_beliefs = [
+            build_chemical_belief_state(self.memory[i], info)
+            for i, info in enumerate(self.last_infos)
+        ]
+        thinking_scores = [
+            score_thinking(
+                response=response,
+                skill_name=action,
+                state=info,
+                candidate_targets_before=belief["candidate_targets"],
+                valid_skills=info.get("valid_skills"),
+            )
+            for response, action, info, belief in zip(
+                text_actions, actions, self.last_infos, pre_beliefs
+            )
+        ]
 
         # Keep execution strict, but pass a dense syntax score to the
         # environment reward.  A malformed response never executes an action;
@@ -669,6 +692,21 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             actions,
             format_scores=format_scores,
         )
+        effective_thinking_scores = []
+        weighted_thinking_scores = []
+        combined_rewards = []
+        for reward, score, info in zip(rewards, thinking_scores, infos):
+            reward_components = info.get("reward_components") or {}
+            combined, effective, weighted = combine_task_and_thinking_reward(
+                task_reward=float(reward),
+                thinking_score=float(score["raw"]),
+                reward_components=reward_components,
+                coefficient=thinking_reward_coef,
+            )
+            effective_thinking_scores.append(effective)
+            weighted_thinking_scores.append(weighted)
+            combined_rewards.append(combined)
+        rewards = combined_rewards
 
         # Keep failed formatting visible to the next prompt without claiming
         # that an action was executed.  The environment itself receives None.
@@ -714,6 +752,16 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             # task or from a malformed <think>/<action> response.
             info["response_format_valid"] = bool(valids[i])
             info["response_format_score"] = float(format_scores[i])
+            info["thinking_reward_verifier_raw"] = float(thinking_scores[i]["raw"])
+            info["thinking_reward"] = float(effective_thinking_scores[i])
+            info["thinking_reward_weighted"] = float(weighted_thinking_scores[i])
+            info["thinking_reward_components"] = thinking_scores[i]
+            reward_components = info.get("reward_components")
+            if isinstance(reward_components, dict):
+                reward_components["thinking"] = float(effective_thinking_scores[i])
+                reward_components["thinking_weighted"] = info["thinking_reward_weighted"]
+                reward_components["total_before_thinking"] = reward_components.get("total")
+                reward_components["total"] = float(rewards[i])
 
         anchor_obs = build_discoveryworld_anchor_obs(text_obs, infos, self.memory, self.config)
         next_observations = {"text": full_text_obs, "image": None, "anchor": anchor_obs}

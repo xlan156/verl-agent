@@ -652,13 +652,27 @@ def filter_observed_chemical_skills(
 ) -> Tuple[List[str], Dict[str, Tuple[int, int, int, int]]]:
     """Remove chemical edges whose destination was already assayed.
 
-    If every chemical edge is exhausted, expose ``wash_jar`` as a non-edge
-    escape action instead of advertising a known repeated experiment.
+    Revisit filtering is only an exploration aid.  Once the belief has a
+    unique target, previously assayed mixtures may be necessary intermediate
+    states on the path to that target, so all phase-valid actions remain
+    available.  Likewise, never replace a fully filtered action set with an
+    unrelated fallback: restoring the phase-valid actions keeps the prompt's
+    action set a superset of the rule-based teacher's choices.
     """
     if not info.get("is_key_in_jar"):
         return list(valid_skills), {}
-    observed_states = set(collect_experiment_evidence(records))
+    evidence = collect_experiment_evidence(records)
+    observed_states = set(evidence)
     if not observed_states:
+        return list(valid_skills), {}
+
+    required_amount = int(info.get("max_chemical_n", 0) or 0)
+    remaining_targets = (
+        candidate_targets(evidence, required_amount)
+        if required_amount > 0
+        else []
+    )
+    if len(remaining_targets) == 1:
         return list(valid_skills), {}
 
     kept: List[str] = []
@@ -671,7 +685,9 @@ def filter_observed_chemical_skills(
             kept.append(skill_name)
 
     if not kept and filtered:
-        kept = [WASH]
+        # The teacher selects from the phase-valid chemical actions.  Hiding
+        # all of them here can create an irreversible wash_jar-only loop.
+        return list(valid_skills), {}
     return kept, filtered
 
 

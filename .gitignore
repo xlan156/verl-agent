@@ -140,6 +140,7 @@ Qwen2.5-0.5B-Instruct/
 qwen_apikey.txt
 xlan-scripts/
 qwen_hf_model/
+grpo_trained_model/
 
 xlan/
 xlan/curriculum_pool_summary.csv

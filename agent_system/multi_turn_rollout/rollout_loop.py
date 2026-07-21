@@ -414,6 +414,9 @@ class TrajectoryCollector:
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
                         "action_status": str(info_i.get("action_status", "")),
                         "post_key_rust_status": str(info_i.get("key_rust_status", "")),
+                        "thinking_reward": float(info_i.get("thinking_reward", 0.0)),
+                        "thinking_reward_weighted": float(info_i.get("thinking_reward_weighted", 0.0)),
+                        "response_format_score": float(info_i.get("response_format_score", 0.0)),
                     }
                     llm_step_rows.append(row)
 
@@ -618,6 +621,9 @@ class TrajectoryCollector:
                         "teacher_skill",
                         "action_status",
                         "post_key_rust_status",
+                        "thinking_reward",
+                        "thinking_reward_weighted",
+                        "response_format_score",
                         "post_won",
                     ]
                     table = wandb.Table(columns=columns)
@@ -635,6 +641,9 @@ class TrajectoryCollector:
                             r.get("teacher_skill"),
                             r.get("action_status"),
                             r.get("post_key_rust_status"),
+                            r.get("thinking_reward"),
+                            r.get("thinking_reward_weighted"),
+                            r.get("response_format_score"),
                             r.get("post_won"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))

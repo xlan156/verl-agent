@@ -76,6 +76,7 @@ ENV_HISTORY_LENGTH="${ENV_HISTORY_LENGTH:-8}"
 ENV_SEED="${ENV_SEED:-0}"
 TRAIN_SEED_POOL="${TRAIN_SEED_POOL:-null}"
 TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-0.1}"
+THINKING_REWARD_COEF="${THINKING_REWARD_COEF:-0.2}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 
 # Trainer, logging, and checkpoints
@@ -189,6 +190,7 @@ ENVIRONMENT=(
     +env.discoveryworld.anchor_mode=belief_summary
     "+env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N}"
     "+env.discoveryworld.teacher_skill_reward_coef=${TEACHER_REWARD_COEF}"
+    "+env.discoveryworld.thinking_reward_coef=${THINKING_REWARD_COEF}"
     "+env.discoveryworld.train_seed_pool=${TRAIN_SEED_POOL}"
     "env.resources_per_worker.num_cpus=${NUM_CPUS_PER_ENV_WORKER}"
 )
