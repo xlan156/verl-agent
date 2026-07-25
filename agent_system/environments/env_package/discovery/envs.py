@@ -20,6 +20,7 @@ from agent_system.environments.env_package.discovery.config import (
 )
 from agent_system.environments.env_package.discovery.rewards import DiscoveryWorldRewardMixin
 from agent_system.environments.env_package.discovery.seed import build_ordered_seed_pools_by_amount
+from agent_system.environments.env_package.discovery.dynamic_sampler import DynamicSeedSampler
 from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
 from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
 from agent_system.environments.env_package.discovery.utils import (
@@ -62,7 +63,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         save_frames: bool = False,
         frames_dir: Optional[str] = None,
         max_chemical_n: Optional[int] = None,
-        teacher_skill_reward_coef: float = 0.1,
+        teacher_skill_reward_coef: float = 1.0,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -114,7 +115,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self.teacher = RulebasedAgentSkill(self)
         self._last_teacher_skill: Optional[str] = None
         self._last_info: Optional[Dict[str, Any]] = None
-        self._chemical_evidence: Dict[Tuple[int, int, int, int], Tuple[str, str]] = {}
 
         self.used_dispensers = {"A": False, "B": False, "C": False, "D": False}
 
@@ -217,7 +217,6 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
     def step(
         self,
         action: Any,
-        format_score: float = 0.0,
     ) -> Tuple[str, float, bool, Dict[str, Any]]:
         """Execute one step: validate action, execute if valid, compute reward."""
         assert self._api is not None
@@ -243,9 +242,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             info["executed_action"] = None
             self._update_state_from_info(info)
             
-            reward, done = self._compute_step_reward(
-                None, info, format_score=format_score,
-            )
+            reward, done = self._compute_step_reward(None, info)
             self._last_info = deepcopy(info)
             return text_obs, reward, done, info
 
@@ -282,9 +279,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         info["action_status"] = action_status
         self._update_state_from_info(info)
         
-        reward, done = self._compute_step_reward(
-            skill_name, info, format_score=format_score
-        )
+        reward, done = self._compute_step_reward(skill_name, info)
         self._last_info = deepcopy(info)
 
         return text_obs, reward, done, info
@@ -320,18 +315,25 @@ class DiscoveryWorldWorker:
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
-        obs, info = self._env.reset(kwargs=kwargs)
+        reset_kwargs = dict(kwargs or {})
+        requested_seed = reset_kwargs.pop("seed", None)
+        if requested_seed is not None:
+            self._seed = int(requested_seed)
+            # DiscoveryWorldEnv recreates its API/scenario during every reset,
+            # so updating the seed before reset safely changes the latent task
+            # without recreating the Ray actor.
+            self._env._seed = self._seed
+        if "train_epoch" in reset_kwargs:
+            self._env.train_epoch = int(reset_kwargs["train_epoch"])
+        obs, info = self._env.reset(kwargs=reset_kwargs)
         info["seed"] = self._seed
         return obs, info
 
     def step(
         self,
         action: Any,
-        format_score: float = 0.0,
     ) -> Tuple[str, float, bool, Dict[str, Any]]:
-        obs, reward, done, info = self._env.step(
-            action, format_score=format_score
-        )
+        obs, reward, done, info = self._env.step(action)
         info["seed"] = self._seed
         return obs, reward, done, info
 
@@ -382,6 +384,8 @@ class DiscoveryWorldVectorEnv:
         )
         self._train_seed_pool = env_kwargs.get("train_seed_pool")
         self._eval_seed_pool = env_kwargs.get("eval_seed_pool")
+        dynamic_sampler_config = dict(env_kwargs.get("dynamic_sampler") or {})
+        self._dynamic_sampler: Optional[DynamicSeedSampler] = None
 
         if self.num_processes == 0:
             # No envs to build (e.g. no validation envs configured)
@@ -405,6 +409,27 @@ class DiscoveryWorldVectorEnv:
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
         selected_split = "train" if self.is_train else "val"
         goal_stage_plan = [self._max_chemical_n] * self.num_processes
+        default_split_seed_list = list(
+            self._target_seed_pools.get(self._max_chemical_n, {}).get(selected_split, [])
+        )
+        if self.is_train and self._train_seed_pool is not None:
+            default_split_seed_list = [int(value) for value in self._train_seed_pool]
+        if not self.is_train and self._eval_seed_pool is not None:
+            default_split_seed_list = [int(value) for value in self._eval_seed_pool]
+        if not default_split_seed_list:
+            default_split_seed_list = [int(seed)]
+
+        if self.is_train and coerce_bool(dynamic_sampler_config.get("enable", False)):
+            self._dynamic_sampler = DynamicSeedSampler(
+                seeds=default_split_seed_list,
+                config=dynamic_sampler_config,
+                rng_seed=int(dynamic_sampler_config.get("rng_seed", seed)),
+            )
+            print(
+                "DiscoveryWorld dynamic seed sampler enabled for seeds="
+                f"{list(self._dynamic_sampler.seeds)}",
+                flush=True,
+            )
 
         print(f"DEBUG: Starting to launch {self.num_processes} Ray actors...", flush=True)
         seed_pools = self._target_seed_pools
@@ -451,15 +476,24 @@ class DiscoveryWorldVectorEnv:
         elif isinstance(kwargs, dict):
             worker_kwargs = [dict(kwargs) for _ in range(self.num_processes)]
         elif isinstance(kwargs, np.ndarray):
-            worker_kwargs = kwargs.tolist()
+            worker_kwargs = [dict(value or {}) for value in kwargs.tolist()]
         elif isinstance(kwargs, (list, tuple)):
             if len(kwargs) != self.num_processes:
                 raise ValueError(
                     f"Expected {self.num_processes} reset kwargs, got {len(kwargs)}",
                 )
-            worker_kwargs = list(kwargs)
+            worker_kwargs = [dict(value or {}) for value in kwargs]
         else:
             raise ValueError(f"Unsupported reset kwargs type: {type(kwargs)}")
+
+        if self._dynamic_sampler is not None:
+            group_seeds = self._dynamic_sampler.sample(self.env_num)
+            for group_index, group_seed in enumerate(group_seeds):
+                group_start = group_index * self.group_n
+                group_end = group_start + self.group_n
+                for worker_index in range(group_start, group_end):
+                    worker_kwargs[worker_index]["seed"] = int(group_seed)
+                    self._worker_seeds[worker_index] = int(group_seed)
 
         futures = [worker.reset.remote(worker_kwargs[i]) for i, worker in enumerate(self._workers)]
         print(f"DEBUG: Waiting for {len(futures)} workers to reset via ray.get...", flush=True)
@@ -471,10 +505,68 @@ class DiscoveryWorldVectorEnv:
 
         return obs_list, info_list
 
+    def observe_dynamic_sampler(
+        self,
+        episode_rewards: np.ndarray,
+        episode_task_rewards: np.ndarray,
+        success: Dict[str, np.ndarray],
+        accepted_groups: np.ndarray,
+        global_step: Optional[int] = None,
+    ) -> None:
+        if self._dynamic_sampler is None:
+            return
+        rewards = np.asarray(episode_rewards)
+        task_rewards = np.asarray(episode_task_rewards)
+        seeds = np.asarray(success["eval_seed"])
+        successes = np.asarray(success["success_rate"])
+        accepted_groups = np.asarray(accepted_groups, dtype=bool)
+        if len(rewards) != self.num_processes:
+            raise ValueError(
+                f"Expected {self.num_processes} rewards, received {len(rewards)}"
+            )
+        if len(task_rewards) != self.num_processes:
+            raise ValueError(
+                f"Expected {self.num_processes} task rewards, received {len(task_rewards)}"
+            )
+        if len(accepted_groups) != self.env_num:
+            raise ValueError(
+                f"Expected {self.env_num} group decisions, received {len(accepted_groups)}"
+            )
+        for group_index in range(self.env_num):
+            start = group_index * self.group_n
+            end = start + self.group_n
+            group_seeds = seeds[start:end]
+            if len(set(int(value) for value in group_seeds)) != 1:
+                raise RuntimeError(f"Mixed seeds in adaptive rollout group: {group_seeds}")
+            self._dynamic_sampler.observe_group(
+                seed=int(group_seeds[0]),
+                rewards=rewards[start:end],
+                task_rewards=task_rewards[start:end],
+                successes=successes[start:end],
+                accepted=bool(accepted_groups[group_index]),
+                global_step=global_step,
+            )
+
+    def dynamic_sampler_metrics(self) -> Dict[str, float]:
+        if self._dynamic_sampler is None:
+            return {}
+        return self._dynamic_sampler.metrics()
+
+    def dynamic_sampler_state_dict(self) -> Optional[Dict[str, Any]]:
+        if self._dynamic_sampler is None:
+            return None
+        return self._dynamic_sampler.state_dict()
+
+    def load_dynamic_sampler_state_dict(self, state: Dict[str, Any]) -> None:
+        if self._dynamic_sampler is None:
+            raise ValueError(
+                "Checkpoint contains a dynamic sampler, but adaptive seed sampling is disabled"
+            )
+        self._dynamic_sampler.load_state_dict(state)
+
     def step(
         self,
         actions: List[Any],
-        format_scores: Optional[List[float]] = None,
     ) -> Tuple[List[str], List[float], List[bool], List[Dict[str, Any]]]:
         if self.num_processes == 0:
             if len(actions) not in (0, None):
@@ -487,23 +579,14 @@ class DiscoveryWorldVectorEnv:
             raise ValueError(
                 f"Expected {self.num_processes} actions, got {len(actions)}",
             )
-        if format_scores is None:
-            format_scores = [0.0] * len(actions)
-        if len(format_scores) != self.num_processes:
-            raise ValueError(
-                f"Expected {self.num_processes} format scores, got {len(format_scores)}",
-            )
-
         obs_list: List[str] = []
         reward_list: List[float] = []
         done_list: List[bool] = []
         info_list: List[Dict[str, Any]] = []
 
         futures = []
-        for worker, act, format_score in zip(
-            self._workers, actions, format_scores
-        ):
-            future = worker.step.remote(act, float(format_score))
+        for worker, act in zip(self._workers, actions):
+            future = worker.step.remote(act)
             futures.append(future)
 
         results = ray.get(futures)

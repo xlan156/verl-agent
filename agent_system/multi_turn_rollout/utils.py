@@ -16,7 +16,7 @@
 import torch
 import numpy as np
 import random
-from typing import List, Tuple, Dict
+from typing import Dict, List, Optional, Tuple
 import math
 from PIL import Image
 from verl import DataProto
@@ -130,6 +130,21 @@ def adjust_batch(config, data: DataProto, mode="copy") -> DataProto:
     return adjusted_batch
 
 
+def reward_variance_group_mask(
+    episode_rewards: np.ndarray,
+    batch_size: int,
+    group_n: int,
+    variance_epsilon: float = 0.0,
+) -> np.ndarray:
+    """Return one boolean per rollout group indicating non-zero reward variance."""
+    rewards = np.asarray(episode_rewards, dtype=np.float64)
+    expected = int(batch_size) * int(group_n)
+    if len(rewards) != expected:
+        raise ValueError(f"Expected {expected} episode rewards, received {len(rewards)}")
+    grouped = rewards.reshape(int(batch_size), int(group_n))
+    return np.ptp(grouped, axis=1) > float(variance_epsilon)
+
+
 def filter_group_data(batch_list : List[Dict],
                         episode_rewards: np.ndarray,
                         episode_lengths: np.ndarray,
@@ -137,34 +152,46 @@ def filter_group_data(batch_list : List[Dict],
                         traj_uid: np.ndarray,
                         tool_callings: np.ndarray,
                         config,
+                        filter_rewards: Optional[np.ndarray] = None,
                         last_try: bool = False,
                         ):
     """
     Dynamic Sampling:
-    Over-sample and filter out episode group in which all episodes have the same rewards.
+    Over-sample and filter out groups with constant filtering returns. The
+    optimized returns are still retained in ``episode_rewards``; callers can
+    supply teacher-free returns through ``filter_rewards``.
     Adopted from DAPO (https://arxiv.org/abs/2503.14476)
     """
     if last_try:
         return batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings
-    
+
     batch_size = config.data.train_batch_size
     group_n = config.env.rollout.n
     if group_n <= 1:
         print("Warning: group_n <= 1, no need to adopt dynamic sampling")
 
     # Handle each group
+    variance_epsilon = float(
+        config.algorithm.filter_groups.get("reward_variance_epsilon", 0.0)
+    )
+    informative_groups = reward_variance_group_mask(
+        episode_rewards=(
+            episode_rewards if filter_rewards is None else filter_rewards
+        ),
+        batch_size=batch_size,
+        group_n=group_n,
+        variance_epsilon=variance_epsilon,
+    )
     keep_indices = np.array([], dtype=np.int64)
     for i in range(batch_size):
         # Get the indices of the current group
         group_indices = np.arange(i * group_n, (i + 1) * group_n)
-        group_rewards = episode_rewards[group_indices]
-
         # check if all group_traj_uid are the same
         for index in group_indices:
             assert batch_list[index][0]['uid'] == batch_list[group_indices[0]][0]['uid']
 
         # Check if all rewards in the group are the same
-        if not np.all(group_rewards == group_rewards[0]):
+        if informative_groups[i]:
             # If so, keep the entire group, otherwise, remove it
             keep_indices = np.concatenate((keep_indices, group_indices))
     
@@ -182,4 +209,3 @@ def filter_group_data(batch_list : List[Dict],
     tool_callings = tool_callings[keep_indices]
 
     return batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings
-

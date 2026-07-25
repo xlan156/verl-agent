@@ -301,9 +301,12 @@ trainer:
   # Save one fixed-name checkpoint whenever validation success strictly improves.
   save_best_val_success: False
   best_val_success_metric: val/success_rate
+  save_best_train_success: False
+  best_train_success_metric: episode/success_rate
   # auto: find the last ckpt to resume. If can't find, start from scratch
   resume_mode: auto # or disable or resume_path if resume_from_path is set
   resume_from_path: null
+  resume_dataloader: True
   del_local_ckpt_after_load: False
   val_before_train: True
   test_freq: -1

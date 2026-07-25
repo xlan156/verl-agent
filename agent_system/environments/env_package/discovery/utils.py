@@ -196,7 +196,7 @@ def _object_names_by_location(ui: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[
 
 
 def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical_n: int = 2) -> List[str]:
-    """Return state-dependent high-level skills following the rule-based phase order."""
+    """Return phase-valid skills without belief-based action filtering."""
     info = info or {}
     ui = (info.get("raw_observation") or {}).get("ui", {})
     inv_objects, accessible_objects = _object_names_by_location(ui)
@@ -244,16 +244,15 @@ def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical
         if chemical_total < max_chemical_n:
             return [USE_DISPENSER_A, USE_DISPENSER_B, USE_DISPENSER_C, USE_DISPENSER_D]
 
-        removable = []
-        for chemical_name, skill_name in (
-            ("A", REMOVE_CHEMICAL_A),
-            ("B", REMOVE_CHEMICAL_B),
-            ("C", REMOVE_CHEMICAL_C),
-            ("D", REMOVE_CHEMICAL_D),
-        ):
-            if int(chemical_dict.get(chemical_name, 0) or 0) > 0:
-                removable.append(skill_name)
-        return removable or [WASH]
+        # Expose every remove action, including chemicals currently at zero.
+        # Removing an absent chemical is an executable no-op whose low reward
+        # should be learned by RL, not ruled out by a hand-written controller.
+        return [
+            REMOVE_CHEMICAL_A,
+            REMOVE_CHEMICAL_B,
+            REMOVE_CHEMICAL_C,
+            REMOVE_CHEMICAL_D,
+        ]
 
     return list(ORDERED_SKILL_NAMES)
 
@@ -616,81 +615,6 @@ def collect_experiment_evidence(
     return results
 
 
-_CHEMICAL_SKILL_DELTAS = {
-    USE_DISPENSER_A: (0, 1),
-    USE_DISPENSER_B: (1, 1),
-    USE_DISPENSER_C: (2, 1),
-    USE_DISPENSER_D: (3, 1),
-    REMOVE_CHEMICAL_A: (0, -1),
-    REMOVE_CHEMICAL_B: (1, -1),
-    REMOVE_CHEMICAL_C: (2, -1),
-    REMOVE_CHEMICAL_D: (3, -1),
-}
-
-
-def chemical_state_after_skill(
-    chemical_dict: Optional[Dict[str, Any]],
-    skill_name: str,
-) -> Optional[Tuple[int, int, int, int]]:
-    """Return the one-step chemical state implied by a use/remove skill."""
-    delta = _CHEMICAL_SKILL_DELTAS.get(skill_name)
-    if delta is None:
-        return None
-    counts = chemical_counts(chemical_dict)
-    state = [counts[name] for name in CHEMICAL_NAMES]
-    index, amount = delta
-    state[index] += amount
-    if state[index] < 0:
-        return None
-    return tuple(state)
-
-
-def filter_observed_chemical_skills(
-    valid_skills: List[str],
-    info: Dict[str, Any],
-    records: List[Dict[str, Any]],
-) -> Tuple[List[str], Dict[str, Tuple[int, int, int, int]]]:
-    """Remove chemical edges whose destination was already assayed.
-
-    Revisit filtering is only an exploration aid.  Once the belief has a
-    unique target, previously assayed mixtures may be necessary intermediate
-    states on the path to that target, so all phase-valid actions remain
-    available.  Likewise, never replace a fully filtered action set with an
-    unrelated fallback: restoring the phase-valid actions keeps the prompt's
-    action set a superset of the rule-based teacher's choices.
-    """
-    if not info.get("is_key_in_jar"):
-        return list(valid_skills), {}
-    evidence = collect_experiment_evidence(records)
-    observed_states = set(evidence)
-    if not observed_states:
-        return list(valid_skills), {}
-
-    required_amount = int(info.get("max_chemical_n", 0) or 0)
-    remaining_targets = (
-        candidate_targets(evidence, required_amount)
-        if required_amount > 0
-        else []
-    )
-    if len(remaining_targets) == 1:
-        return list(valid_skills), {}
-
-    kept: List[str] = []
-    filtered: Dict[str, Tuple[int, int, int, int]] = {}
-    for skill_name in valid_skills:
-        next_state = chemical_state_after_skill(info.get("chemical_dict"), skill_name)
-        if next_state is not None and next_state in observed_states:
-            filtered[skill_name] = next_state
-        else:
-            kept.append(skill_name)
-
-    if not kept and filtered:
-        # The teacher selects from the phase-valid chemical actions.  Hiding
-        # all of them here can create an irreversible wash_jar-only loop.
-        return list(valid_skills), {}
-    return kept, filtered
-
-
 def build_chemical_belief_state(
     records: List[Dict[str, Any]],
     info: Dict[str, Any],
@@ -741,10 +665,10 @@ def build_chemical_belief(
     remaining_text = ", ".join(
         f"({','.join(map(str, target))})" for target in belief["candidate_targets"]
     )
-    sections.append(
-        f"Remaining candidate targets ({belief['candidate_count']}): "
-        + (remaining_text or "none")
-    )
+    #sections.append(
+    #    f"Remaining candidate targets ({belief['candidate_count']}): "
+    #    + (remaining_text or "none")
+    #)
     return "\n".join(sections)
 
 
@@ -829,14 +753,7 @@ def build_discoveryworld_text_obs(
         valid_skill_names = get_valid_discoveryworld_skills(
             infos[i], max_chemical_n=max_chemical_n
         )
-        valid_skill_names, filtered_revisits = filter_observed_chemical_skills(
-            valid_skill_names, infos[i], records
-        )
         infos[i]["valid_skills"] = list(valid_skill_names)
-        infos[i]["filtered_revisit_skills"] = {
-            skill_name: list(state)
-            for skill_name, state in filtered_revisits.items()
-        }
         template_args["valid_skills"] = "\n".join(valid_skill_names)
         in_chemical_stage = bool(infos[i].get("is_key_in_jar"))
         if init or in_chemical_stage or config.env.history_length <= 0 or not records:

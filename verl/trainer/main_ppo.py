@@ -57,6 +57,7 @@ def run_ppo(config) -> None:
 class TaskRunner:
     def run(self, config):
         # print initial config
+        import sys
         from pprint import pprint
 
         from omegaconf import OmegaConf
@@ -64,13 +65,16 @@ class TaskRunner:
         from verl.utils.fs import copy_to_local
 
         pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True will eval symbol values
+        sys.stdout.flush()
         OmegaConf.resolve(config)
 
         # download the checkpoint from hdfs
         local_path = copy_to_local(config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get("use_shm", False))
 
+        print("[startup] Creating environment workers...", flush=True)
         from agent_system.environments import make_envs
         envs, val_envs = make_envs(config)
+        print("[startup] Environment workers created.", flush=True)
 
         # instantiate tokenizer
         from verl.utils import hf_processor, hf_tokenizer
@@ -186,7 +190,9 @@ class TaskRunner:
             envs=envs,
             val_envs=val_envs,
         )
+        print("[startup] Initializing model workers...", flush=True)
         trainer.init_workers()
+        print("[startup] Model workers initialized; entering trainer.fit().", flush=True)
         return trainer.fit()
 
 

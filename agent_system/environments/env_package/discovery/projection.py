@@ -46,11 +46,10 @@ def _extract_skill(response: Any) -> Optional[str]:
 
 
 def response_format_score(response: Any) -> float:
-    """Return a dense, syntax-only reward for approaching the response schema.
+    """Return one syntax-only diagnostic for the response schema.
 
-    Only a score of 1.0 is executable.  Lower scores deliberately leave the
-    action unexecuted, but let GRPO distinguish a response that is close to
-    the required schema from one with no useful structure at all.
+    Only a score of 1.0 is executable. Lower scores describe how close the
+    response is to the schema but do not contribute to environment reward.
     """
     if not isinstance(response, str):
         return 0.0
@@ -109,8 +108,8 @@ def discoveryworld_projection(
         if skill is not None and info is not None:
             prompt_valid_skills = (info or {}).get("valid_skills")
             if prompt_valid_skills is not None:
-                # The prompt builder has memory-aware filtering that cannot be
-                # reconstructed from the current info alone.
+                # Use the exact phase-valid set shown to the policy. It is
+                # deliberately independent of chemical belief/history.
                 valid_skills = set(prompt_valid_skills)
             else:
                 max_chemical_n = int((info or {}).get("max_chemical_n", 2) or 2)

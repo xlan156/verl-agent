@@ -24,7 +24,13 @@ from verl.utils.model import compute_position_id_with_mask
 import verl.utils.torch_functional as verl_F
 from transformers import PreTrainedTokenizer
 import uuid
-from agent_system.multi_turn_rollout.utils import process_image, to_list_of_dict, torch_to_numpy, filter_group_data
+from agent_system.multi_turn_rollout.utils import (
+    filter_group_data,
+    process_image,
+    reward_variance_group_mask,
+    to_list_of_dict,
+    torch_to_numpy,
+)
 from agent_system.environments import EnvironmentManagerBase
 from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
@@ -309,6 +315,7 @@ class TrajectoryCollector:
         Returns:
             total_batch_list (List[Dict]): List of trajectory data for each environment
             episode_rewards (np.ndarray): Total rewards for each environment
+            episode_task_rewards (np.ndarray): Teacher-free task returns.
             episode_lengths (np.ndarray): Total steps for each environment
             success (Dict[str, np.ndarray]): Success samples for each environment
             traj_uid (np.ndarray): Trajectory unique identifiers
@@ -338,6 +345,7 @@ class TrajectoryCollector:
         total_infos = [[] for _ in range(batch_size)]
         episode_lengths = np.zeros(batch_size, dtype=np.float32)
         episode_rewards = np.zeros(batch_size, dtype=np.float32)
+        episode_task_rewards = np.zeros(batch_size, dtype=np.float32)
         tool_callings = np.zeros(batch_size, dtype=np.float32)
         # Trajectory collection loop
         for _step in range(self.config.env.max_steps):
@@ -398,6 +406,7 @@ class TrajectoryCollector:
 
                 for i in range(batch_size):
                     info_i: Dict[str, Any] = infos[i] if i < len(infos) else {}
+                    reward_components = info_i.get("reward_components") or {}
                     prompt_text = None
                     if obs_texts is not None and i < len(obs_texts):
                         prompt_text = obs_texts[i]
@@ -405,7 +414,24 @@ class TrajectoryCollector:
                     row = {
                         "rollout_step": int(_step),
                         "env_index": int(i),
+                        "environment_seed": int(info_i.get("seed", -1)),
                         "reward": float(_rewards[i]) if i < len(_rewards) else None,
+                        "task_reward": float(info_i.get("task_reward", _rewards[i])),
+                        "teacher_reward": float(
+                            reward_components.get("teacher", 0.0)
+                        ),
+                        "game_progress_reward": float(
+                            reward_components.get("game_progress", 0.0)
+                        ),
+                        "target_distance_reward": float(
+                            reward_components.get("target_distance", 0.0)
+                        ),
+                        "repetition_penalty": float(
+                            reward_components.get("repetition", 0.0)
+                        ),
+                        "completion_reward": float(
+                            reward_components.get("completion", 0.0)
+                        ),
                         "done": bool(_dones[i]) if i < len(_dones) else False,
                         "prompt": _truncate(prompt_text if prompt_text is None else str(prompt_text)),
                         "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
@@ -414,9 +440,8 @@ class TrajectoryCollector:
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
                         "action_status": str(info_i.get("action_status", "")),
                         "post_key_rust_status": str(info_i.get("key_rust_status", "")),
-                        "thinking_reward": float(info_i.get("thinking_reward", 0.0)),
-                        "thinking_reward_weighted": float(info_i.get("thinking_reward_weighted", 0.0)),
                         "response_format_score": float(info_i.get("response_format_score", 0.0)),
+                        "post_won": bool(info_i.get("won", False)),
                     }
                     llm_step_rows.append(row)
 
@@ -437,6 +462,14 @@ class TrajectoryCollector:
             # Create reward tensor, only assign rewards for active environments
             # episode_rewards += torch_to_numpy(rewards) * torch_to_numpy(active_masks)
             episode_rewards[active_masks] += torch_to_numpy(rewards)[active_masks]
+            step_task_rewards = np.asarray(
+                [
+                    info.get("task_reward", reward)
+                    for info, reward in zip(infos, rewards)
+                ],
+                dtype=np.float32,
+            )
+            episode_task_rewards[active_masks] += step_task_rewards[active_masks]
             episode_lengths[active_masks] += 1
 
             assert len(rewards) == batch_size, f"env should return rewards for all environments, got {len(rewards)} rewards for {batch_size} environments"
@@ -467,7 +500,15 @@ class TrajectoryCollector:
                     episode_lengths=episode_lengths,
                     )
         
-        return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings
+        return (
+            total_batch_list,
+            episode_rewards,
+            episode_task_rewards,
+            episode_lengths,
+            success,
+            traj_uid,
+            tool_callings,
+        )
     
     def dynamic_multi_turn_loop(
             self,
@@ -475,6 +516,7 @@ class TrajectoryCollector:
             actor_rollout_wg, 
             envs: EnvironmentManagerBase,
             llm_step_rows: Optional[list[dict[str, Any]]] = None,
+            global_step: Optional[int] = None,
             ) -> DataProto:
         """
         Conduct dynamic rollouts until a target batch size is met. 
@@ -501,19 +543,52 @@ class TrajectoryCollector:
         total_tool_callings = []
         try_count: int = 0
         max_try_count = self.config.algorithm.filter_groups.max_num_gen_batches
+        target_trajectories = (
+            self.config.data.train_batch_size * self.config.env.rollout.n
+        )
+        variance_epsilon = float(
+            self.config.algorithm.filter_groups.get("reward_variance_epsilon", 0.0)
+        )
+        sampler_state_fn = getattr(envs, "dynamic_sampler_state_dict", None)
+        adaptive_sampler_enabled = (
+            callable(sampler_state_fn) and sampler_state_fn() is not None
+        )
 
-        while len(total_batch_list) < self.config.data.train_batch_size * self.config.env.rollout.n and try_count < max_try_count:
+        while len(total_batch_list) < target_trajectories and try_count < max_try_count:
 
             if len(total_batch_list) > 0:
-                print(f"valid num={len(total_batch_list)} < target num={self.config.data.train_batch_size * self.config.env.rollout.n}. Keep generating... ({try_count}/{max_try_count})")
+                print(f"valid num={len(total_batch_list)} < target num={target_trajectories}. Keep generating... ({try_count}/{max_try_count})")
             try_count += 1
 
-            batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = self.vanilla_multi_turn_loop(
+            (
+                batch_list,
+                episode_rewards,
+                episode_task_rewards,
+                episode_lengths,
+                success,
+                traj_uid,
+                tool_callings,
+            ) = self.vanilla_multi_turn_loop(
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
                 llm_step_rows=llm_step_rows,
             )
+            informative_groups = reward_variance_group_mask(
+                episode_rewards=episode_task_rewards,
+                batch_size=self.config.data.train_batch_size,
+                group_n=self.config.env.rollout.n,
+                variance_epsilon=variance_epsilon,
+            )
+            observe_sampler = getattr(envs, "observe_dynamic_sampler", None)
+            if callable(observe_sampler):
+                observe_sampler(
+                    episode_rewards=episode_rewards,
+                    episode_task_rewards=episode_task_rewards,
+                    success=success,
+                    accepted_groups=informative_groups,
+                    global_step=global_step,
+                )
             batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = filter_group_data(batch_list=batch_list, 
                                                                                                 episode_rewards=episode_rewards, 
                                                                                                 episode_lengths=episode_lengths, 
@@ -521,9 +596,26 @@ class TrajectoryCollector:
                                                                                                 traj_uid=traj_uid, 
                                                                                                 tool_callings=tool_callings, 
                                                                                                 config=self.config,
-                                                                                                last_try=(try_count == max_try_count),
+                                                                                                filter_rewards=episode_task_rewards,
+                                                                                                last_try=(
+                                                                                                    try_count == max_try_count
+                                                                                                    and not adaptive_sampler_enabled
+                                                                                                ),
                                                                                                 )
-            
+
+            remaining = target_trajectories - len(total_batch_list)
+            take = min(remaining, len(batch_list))
+            # Filtering retains complete groups and remaining is always a
+            # multiple of group_n, so truncation cannot split a GRPO group.
+            batch_list = batch_list[:take]
+            episode_rewards = episode_rewards[:take]
+            episode_lengths = episode_lengths[:take]
+            success = {key: value[:take] for key, value in success.items()}
+            traj_uid = traj_uid[:take]
+            tool_callings = tool_callings[:take]
+
+            if not batch_list:
+                continue
             total_batch_list += batch_list
             total_episode_rewards.append(episode_rewards)
             total_episode_lengths.append(episode_lengths)
@@ -531,6 +623,19 @@ class TrajectoryCollector:
             total_traj_uid.append(traj_uid)
             total_tool_callings.append(tool_callings)
 
+        if len(total_batch_list) != target_trajectories:
+            sampler_metrics_fn = getattr(envs, "dynamic_sampler_metrics", None)
+            sampler_metrics = (
+                sampler_metrics_fn() if callable(sampler_metrics_fn) else {}
+            )
+            raise RuntimeError(
+                "DAPO dynamic sampling could not collect enough non-zero-task-variance "
+                f"groups after {max_try_count} generation batches: "
+                f"{len(total_batch_list)}/{target_trajectories} trajectories. "
+                f"Sampler summary: {sampler_metrics}"
+            )
+
+        self._last_dynamic_refill_batches = max(0, try_count - 1)
         total_episode_rewards = np.concatenate(total_episode_rewards, axis=0)
         total_episode_lengths = np.concatenate(total_episode_lengths, axis=0)
         total_success = {key: np.concatenate([success[key] for success in total_success], axis=0) for key in total_success[0].keys()}
@@ -575,11 +680,19 @@ class TrajectoryCollector:
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
                 llm_step_rows=llm_step_rows,
+                global_step=wandb_step,
             )
         else:
             # Vanilla Sampling   
-            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = \
-                self.vanilla_multi_turn_loop(
+            (
+                total_batch_list,
+                total_episode_rewards,
+                _,
+                total_episode_lengths,
+                total_success,
+                total_traj_uid,
+                totoal_tool_callings,
+            ) = self.vanilla_multi_turn_loop(
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
@@ -612,7 +725,14 @@ class TrajectoryCollector:
                         "global_step",
                         "rollout_step",
                         "env_index",
+                        "environment_seed",
                         "reward",
+                        "task_reward",
+                        "teacher_reward",
+                        "game_progress_reward",
+                        "target_distance_reward",
+                        "repetition_penalty",
+                        "completion_reward",
                         "done",
                         "prompt",
                         "llm_output",
@@ -621,8 +741,6 @@ class TrajectoryCollector:
                         "teacher_skill",
                         "action_status",
                         "post_key_rust_status",
-                        "thinking_reward",
-                        "thinking_reward_weighted",
                         "response_format_score",
                         "post_won",
                     ]
@@ -632,7 +750,14 @@ class TrajectoryCollector:
                             int(wandb_step),
                             r.get("rollout_step"),
                             r.get("env_index"),
+                            r.get("environment_seed"),
                             r.get("reward"),
+                            r.get("task_reward"),
+                            r.get("teacher_reward"),
+                            r.get("game_progress_reward"),
+                            r.get("target_distance_reward"),
+                            r.get("repetition_penalty"),
+                            r.get("completion_reward"),
                             r.get("done"),
                             r.get("prompt"),
                             r.get("llm_output"),
@@ -641,8 +766,6 @@ class TrajectoryCollector:
                             r.get("teacher_skill"),
                             r.get("action_status"),
                             r.get("post_key_rust_status"),
-                            r.get("thinking_reward"),
-                            r.get("thinking_reward_weighted"),
                             r.get("response_format_score"),
                             r.get("post_won"),
                         )
@@ -650,5 +773,15 @@ class TrajectoryCollector:
             except Exception:
                 # Best-effort logging: never break training/eval if wandb logging fails.
                 pass
+
+        if is_train:
+            sampler_metrics_fn = getattr(envs, "dynamic_sampler_metrics", None)
+            if callable(sampler_metrics_fn):
+                sampler_metrics = sampler_metrics_fn()
+                if sampler_metrics:
+                    sampler_metrics["seed_sampler/refill_batches"] = float(
+                        getattr(self, "_last_dynamic_refill_batches", 0)
+                    ) if self.config.algorithm.filter_groups.enable else 0.0
+                    gen_batch_output.meta_info["dynamic_sampler_metrics"] = sampler_metrics
         
         return gen_batch_output

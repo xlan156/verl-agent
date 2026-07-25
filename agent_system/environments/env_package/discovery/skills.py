@@ -163,6 +163,13 @@ class CombinatorialChemistrySkill():
     def remove_one_chemical(self, chemical):    
         target_dict = dict(self.chemical_dict)
         if target_dict.get(chemical, 0) == 0:
+            # The high-level skill is executable, but removing an absent
+            # chemical is a deliberate no-op that RL should learn to avoid.
+            # Do not leak the previous low-level action's success status.
+            self.env._last_action_result = {
+                "success": False,
+                "message": f"Chemical {chemical} is not present in the jar",
+            }
             return
         target_dict[chemical] = target_dict[chemical] - 1
         self.wash_jar()

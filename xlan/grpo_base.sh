@@ -11,11 +11,13 @@ module load CUDA/12.4.0
 PROJECT_ROOT="${PROJECT_ROOT:-$HOME/projects/verl-agent}"
 cd "${PROJECT_ROOT}"
 source "$HOME/venvs/verlagentdis/bin/activate"
+RAY_CLI="${VIRTUAL_ENV}/bin/ray"
 
 unset ROCR_VISIBLE_DEVICES
 export HYDRA_FULL_ERROR=1
 export RAY_BACKEND_LOG_LEVEL=info
 export VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-XFORMERS}"
+export PYTHONUNBUFFERED=1
 
 # ------------------------- user-adjustable -------------------------
 
@@ -40,7 +42,7 @@ LEARNING_RATE="${LEARNING_RATE:-1e-6}"
 MINI_BATCH_SIZE="${MINI_BATCH_SIZE:-32}"
 ACTOR_MICRO_BATCH_SIZE_PER_GPU="${ACTOR_MICRO_BATCH_SIZE_PER_GPU:-4}"
 KL_LOSS_COEF="${KL_LOSS_COEF:-0.03}"
-INVALID_ACTION_PENALTY_COEF="${INVALID_ACTION_PENALTY_COEF:-0.1}"
+INVALID_ACTION_PENALTY_COEF="${INVALID_ACTION_PENALTY_COEF:-1.0}"
 LR_WARMUP_STYLE="${LR_WARMUP_STYLE:-constant}"
 
 # Rollout and validation generation
@@ -48,9 +50,12 @@ GROUP_SIZE="${GROUP_SIZE:-4}"
 ROLLOUT_TP="${ROLLOUT_TP:-1}"
 ROLLOUT_GPU_MEMORY_UTILIZATION="${ROLLOUT_GPU_MEMORY_UTILIZATION:-0.4}"
 LOG_PROB_MICRO_BATCH_SIZE_PER_GPU="${LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-8}"
+ENTROPY_COEFF="${ENTROPY_COEFF:-0.0001}"
 ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-0.8}"
+ROLLOUT_TOP_K="${ROLLOUT_TOP_K:--1}"
 ROLLOUT_TOP_P="${ROLLOUT_TOP_P:-0.9}"
 VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
+VAL_TOP_K="${VAL_TOP_K:--1}"
 VAL_DO_SAMPLE="${VAL_DO_SAMPLE:-True}"
 
 # DiscoveryWorld environment
@@ -62,8 +67,18 @@ ENV_SEED="${ENV_SEED:-0}"
 TRAIN_SEED_POOL="${TRAIN_SEED_POOL:-null}"
 DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-${ENV_VARIANT:-original}}"
 SAVE_FRAMES="${SAVE_FRAMES:-False}"
-TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-0.1}"
-THINKING_REWARD_COEF="${THINKING_REWARD_COEF:-0.2}"
+TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
+
+# DAPO-style adaptive seed sampling. When enabled, the full configured train
+# pool is sampled dynamically and zero-variance rollout groups are refilled.
+DYNAMIC_SEED_SAMPLER="${DYNAMIC_SEED_SAMPLER:-False}"
+DAPO_MAX_GEN_BATCHES="${DAPO_MAX_GEN_BATCHES:-6}"
+SEED_SAMPLER_UNIFORM_RATIO="${SEED_SAMPLER_UNIFORM_RATIO:-0.4}"
+SEED_SAMPLER_EMA_ALPHA="${SEED_SAMPLER_EMA_ALPHA:-0.2}"
+SEED_SAMPLER_MIN_ATTEMPTS="${SEED_SAMPLER_MIN_ATTEMPTS:-2}"
+SEED_SAMPLER_MAX_PROBABILITY="${SEED_SAMPLER_MAX_PROBABILITY:-0.2}"
+SEED_SAMPLER_REWARD_STD_SCALE="${SEED_SAMPLER_REWARD_STD_SCALE:-5.0}"
+SEED_SAMPLER_RNG_SEED="${SEED_SAMPLER_RNG_SEED:-${ENV_SEED}}"
 
 # Trainer, logging, and checkpoints
 PROJECT_NAME="${PROJECT_NAME:-GRPO-discoveryworld}"
@@ -73,8 +88,14 @@ EPOCHS="${EPOCHS:-20}"
 TEST_FREQ="${TEST_FREQ:-5}"
 SAVE_FREQ="${SAVE_FREQ:-5}"
 SAVE_BEST_VAL_SUCCESS="${SAVE_BEST_VAL_SUCCESS:-False}"
+SAVE_BEST_TRAIN_SUCCESS="${SAVE_BEST_TRAIN_SUCCESS:-False}"
+BEST_TRAIN_SUCCESS_METRIC="${BEST_TRAIN_SUCCESS_METRIC:-episode/success_rate}"
 RESUME_MODE="${RESUME_MODE:-auto}"
 RESUME_FROM_PATH="${RESUME_FROM_PATH:-null}"
+# Set False when changing TRAIN_DATA_SIZE or rebuilding the train parquet
+# across a resume. Model, optimizer, global step, and dynamic sampler state are
+# still restored; only the StatefulDataLoader cursor in data.pt is skipped.
+RESUME_DATALOADER="${RESUME_DATALOADER:-True}"
 
 # Optional preprocessing/SFT stage
 DO_SFT="${DO_SFT:-False}"
@@ -112,6 +133,7 @@ ACTOR=(
     "actor_rollout_ref.actor.ppo_mini_batch_size=${MINI_BATCH_SIZE}"
     "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${ACTOR_MICRO_BATCH_SIZE_PER_GPU}"
     actor_rollout_ref.actor.use_kl_loss=True
+    "actor_rollout_ref.actor.entropy_coeff=${ENTROPY_COEFF}"
     "actor_rollout_ref.actor.kl_loss_coef=${KL_LOSS_COEF}"
     actor_rollout_ref.actor.kl_loss_type=low_var_kl
     actor_rollout_ref.actor.use_invalid_action_penalty=True
@@ -126,8 +148,10 @@ ROLLOUT=(
     "actor_rollout_ref.rollout.gpu_memory_utilization=${ROLLOUT_GPU_MEMORY_UTILIZATION}"
     "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${LOG_PROB_MICRO_BATCH_SIZE_PER_GPU}"
     "actor_rollout_ref.rollout.temperature=${ROLLOUT_TEMPERATURE}"
+    "actor_rollout_ref.rollout.top_k=${ROLLOUT_TOP_K}"
     "actor_rollout_ref.rollout.top_p=${ROLLOUT_TOP_P}"
     "actor_rollout_ref.rollout.val_kwargs.temperature=${VAL_TEMPERATURE}"
+    "actor_rollout_ref.rollout.val_kwargs.top_k=${VAL_TOP_K}"
     "actor_rollout_ref.rollout.val_kwargs.do_sample=${VAL_DO_SAMPLE}"
 )
 
@@ -138,6 +162,8 @@ REF=(
 
 ALGORITHM=(
     algorithm.use_kl_in_reward=False
+    "algorithm.filter_groups.enable=${DYNAMIC_SEED_SAMPLER}"
+    "algorithm.filter_groups.max_num_gen_batches=${DAPO_MAX_GEN_BATCHES}"
 )
 
 ENVIRONMENT=(
@@ -151,8 +177,14 @@ ENVIRONMENT=(
     "+env.discoveryworld.save_frames=${SAVE_FRAMES}"
     "+env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N}"
     "+env.discoveryworld.teacher_skill_reward_coef=${TEACHER_REWARD_COEF}"
-    "+env.discoveryworld.thinking_reward_coef=${THINKING_REWARD_COEF}"
     "+env.discoveryworld.train_seed_pool=${TRAIN_SEED_POOL}"
+    "+env.discoveryworld.dynamic_sampler.enable=${DYNAMIC_SEED_SAMPLER}"
+    "+env.discoveryworld.dynamic_sampler.uniform_ratio=${SEED_SAMPLER_UNIFORM_RATIO}"
+    "+env.discoveryworld.dynamic_sampler.ema_alpha=${SEED_SAMPLER_EMA_ALPHA}"
+    "+env.discoveryworld.dynamic_sampler.min_attempts_per_seed=${SEED_SAMPLER_MIN_ATTEMPTS}"
+    "+env.discoveryworld.dynamic_sampler.max_probability_per_seed=${SEED_SAMPLER_MAX_PROBABILITY}"
+    "+env.discoveryworld.dynamic_sampler.reward_std_scale=${SEED_SAMPLER_REWARD_STD_SCALE}"
+    "+env.discoveryworld.dynamic_sampler.rng_seed=${SEED_SAMPLER_RNG_SEED}"
     "env.resources_per_worker.num_cpus=${NUM_CPUS_PER_ENV_WORKER}"
 )
 
@@ -166,10 +198,13 @@ TRAINER=(
     trainer.log_llm_steps=True
     "trainer.save_freq=${SAVE_FREQ}"
     "trainer.save_best_val_success=${SAVE_BEST_VAL_SUCCESS}"
+    "trainer.save_best_train_success=${SAVE_BEST_TRAIN_SUCCESS}"
+    "trainer.best_train_success_metric=${BEST_TRAIN_SUCCESS_METRIC}"
     "trainer.test_freq=${TEST_FREQ}"
     "trainer.total_epochs=${EPOCHS}"
     "trainer.resume_mode=${RESUME_MODE}"
     "trainer.resume_from_path=${RESUME_FROM_PATH}"
+    "trainer.resume_dataloader=${RESUME_DATALOADER}"
     trainer.val_before_train=True
 )
 
@@ -181,16 +216,22 @@ HEAD_NODE_IP="$(hostname --ip-address)"
 export RAY_ADDRESS="${HEAD_NODE_IP}:${RAY_PORT}"
 
 cleanup() {
-    ray stop || true
+    "${RAY_CLI}" stop || true
 }
 trap cleanup EXIT
 
-ray start --head \
+"${RAY_CLI}" start --head \
+    "--node-ip-address=${HEAD_NODE_IP}" \
     "--port=${RAY_PORT}" \
     "--num-cpus=${RAY_NUM_CPUS}" \
     --include-dashboard=false \
     --block &
 sleep 5
+
+# Fail fast when the driver can connect to GCS but Ray cannot actually
+# schedule workers. Without this check that failure looks like a silent hang
+# immediately after "Connected to Ray cluster".
+python3 -c 'import ray; ray.init(address="auto"); ping = ray.remote(lambda: "ok"); result = ray.get(ping.remote(), timeout=30); print(f"Ray worker health check: {result}", flush=True); ray.shutdown()'
 
 python3 -m examples.data_preprocess.prepare \
     --mode text \

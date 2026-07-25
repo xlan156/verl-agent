@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Tuple, Dict, Union, Any
+from typing import List, Tuple, Dict, Union, Any, Optional
 import json
 from collections import defaultdict
 from functools import partial
@@ -30,7 +30,6 @@ from agent_system.environments.env_package.discovery.utils import (
     all_action_abbr,
     build_discoveryworld_anchor_obs,
     build_discoveryworld_text_obs,
-    build_chemical_belief_state,
     observable_experiment_evidence,
 )
 from agent_system.memory import SimpleMemory, SearchMemory
@@ -656,57 +655,12 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
         from agent_system.environments.env_package.discovery.projection import response_format_score
-        from agent_system.environments.env_package.discovery.rewards import (
-            combine_task_and_thinking_reward,
-            score_thinking,
-        )
 
-        discovery_cfg = getattr(self.config.env, "discoveryworld", None)
-        thinking_reward_coef = float(getattr(discovery_cfg, "thinking_reward_coef", 0.2))
-        pre_beliefs = [
-            build_chemical_belief_state(self.memory[i], info)
-            for i, info in enumerate(self.last_infos)
-        ]
-        thinking_scores = [
-            score_thinking(
-                response=response,
-                skill_name=action,
-                state=info,
-                candidate_targets_before=belief["candidate_targets"],
-                valid_skills=info.get("valid_skills"),
-            )
-            for response, action, info, belief in zip(
-                text_actions, actions, self.last_infos, pre_beliefs
-            )
-        ]
-
-        # Keep execution strict, but pass a dense syntax score to the
-        # environment reward.  A malformed response never executes an action;
-        # it can only earn partial credit for moving closer to the schema.
+        # Formatting is a single diagnostic signal. It is intentionally kept
+        # outside the environment reward; projected action validity separately
+        # controls whether an action can execute.
         format_scores = [response_format_score(response) for response in text_actions]
-        format_scores = [
-            0.0 if action is None and score >= 1.0 else score
-            for action, score in zip(actions, format_scores)
-        ]
-        text_obs, rewards, dones, infos = self.envs.step(
-            actions,
-            format_scores=format_scores,
-        )
-        effective_thinking_scores = []
-        weighted_thinking_scores = []
-        combined_rewards = []
-        for reward, score, info in zip(rewards, thinking_scores, infos):
-            reward_components = info.get("reward_components") or {}
-            combined, effective, weighted = combine_task_and_thinking_reward(
-                task_reward=float(reward),
-                thinking_score=float(score["raw"]),
-                reward_components=reward_components,
-                coefficient=thinking_reward_coef,
-            )
-            effective_thinking_scores.append(effective)
-            weighted_thinking_scores.append(weighted)
-            combined_rewards.append(combined)
-        rewards = combined_rewards
+        text_obs, rewards, dones, infos = self.envs.step(actions)
 
         # Keep failed formatting visible to the next prompt without claiming
         # that an action was executed.  The environment itself receives None.
@@ -746,22 +700,9 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
         for i, info in enumerate(infos):
             info["projected_action"] = actions[i]
             info["is_action_valid"] = to_numpy(valids[i])
-            # The trainer consumes is_action_valid to add the per-step format
-            # penalty.  Keep an explicit diagnostic field as well: it makes
-            # it clear in rollout logs whether a zero reward came from the
-            # task or from a malformed <think>/<action> response.
-            info["response_format_valid"] = bool(valids[i])
+            # The trainer consumes action validity for its invalid-action
+            # penalty; response_format_score only describes response syntax.
             info["response_format_score"] = float(format_scores[i])
-            info["thinking_reward_verifier_raw"] = float(thinking_scores[i]["raw"])
-            info["thinking_reward"] = float(effective_thinking_scores[i])
-            info["thinking_reward_weighted"] = float(weighted_thinking_scores[i])
-            info["thinking_reward_components"] = thinking_scores[i]
-            reward_components = info.get("reward_components")
-            if isinstance(reward_components, dict):
-                reward_components["thinking"] = float(effective_thinking_scores[i])
-                reward_components["thinking_weighted"] = info["thinking_reward_weighted"]
-                reward_components["total_before_thinking"] = reward_components.get("total")
-                reward_components["total"] = float(rewards[i])
 
         anchor_obs = build_discoveryworld_anchor_obs(text_obs, infos, self.memory, self.config)
         next_observations = {"text": full_text_obs, "image": None, "anchor": anchor_obs}
@@ -778,6 +719,31 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
                 success["success_rate"].append(float(info["won"]))
                 success["eval_seed"].append(int(info["seed"]))
                 return
+
+    def observe_dynamic_sampler(
+        self,
+        episode_rewards: np.ndarray,
+        episode_task_rewards: np.ndarray,
+        success: Dict[str, np.ndarray],
+        accepted_groups: np.ndarray,
+        global_step: Optional[int] = None,
+    ) -> None:
+        self.envs.observe_dynamic_sampler(
+            episode_rewards=episode_rewards,
+            episode_task_rewards=episode_task_rewards,
+            success=success,
+            accepted_groups=accepted_groups,
+            global_step=global_step,
+        )
+
+    def dynamic_sampler_metrics(self) -> Dict[str, float]:
+        return self.envs.dynamic_sampler_metrics()
+
+    def dynamic_sampler_state_dict(self) -> Optional[Dict[str, Any]]:
+        return self.envs.dynamic_sampler_state_dict()
+
+    def load_dynamic_sampler_state_dict(self, state: Dict[str, Any]) -> None:
+        self.envs.load_dynamic_sampler_state_dict(state)
 
 def make_envs(config):
     """
@@ -889,10 +855,24 @@ def make_envs(config):
         save_frames = getattr(discovery_cfg, "save_frames", False)
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
         target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
-        teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 0.1)
+        teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 1.0)
         env_variant = getattr(discovery_cfg, "env_variant", "original")
         train_seed_pool = getattr(discovery_cfg, "train_seed_pool", None)
         eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)
+        dynamic_sampler_cfg = getattr(discovery_cfg, "dynamic_sampler", {})
+        dynamic_sampler = (
+            OmegaConf.to_container(dynamic_sampler_cfg, resolve=True)
+            if OmegaConf.is_config(dynamic_sampler_cfg)
+            else dict(dynamic_sampler_cfg or {})
+        )
+        if (
+            dynamic_sampler.get("enable", False)
+            and not config.algorithm.filter_groups.enable
+        ):
+            raise ValueError(
+                "DiscoveryWorld dynamic seed sampling requires "
+                "algorithm.filter_groups.enable=True"
+            )
 
         env_kwargs = {
             "scenario_name": scenario_name,
@@ -906,6 +886,7 @@ def make_envs(config):
             "teacher_skill_reward_coef": teacher_skill_reward_coef,
             "train_seed_pool": train_seed_pool,
             "eval_seed_pool": eval_seed_pool,
+            "dynamic_sampler": dynamic_sampler,
         }
         if save_frames is not None:
             from agent_system.environments.env_package.discovery.config import coerce_bool

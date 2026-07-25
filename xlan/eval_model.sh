@@ -25,7 +25,7 @@ export MPLCONFIGDIR="${TMPDIR:-/tmp}/matplotlib-${SLURM_JOB_ID:-local}"
 
 # This default can be overridden when submitting, for example:
 # CHECKPOINT_PATH=checkpoints/.../global_step_100 sbatch xlan/eval_model.sh
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-0720/best_val_success}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/GRPO-discoveryworld/dapo-0723/best_val_success}"
 
 if [[ ! -d "$CHECKPOINT_PATH/actor" ]]; then
     echo "Checkpoint actor directory not found: $CHECKPOINT_PATH/actor" >&2

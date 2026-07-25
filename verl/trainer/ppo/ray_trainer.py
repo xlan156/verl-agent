@@ -949,6 +949,18 @@ class RayPPOTrainer:
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
 
+        sampler_state_fn = getattr(
+            getattr(self, "envs", None), "dynamic_sampler_state_dict", None
+        )
+        if callable(sampler_state_fn):
+            sampler_state = sampler_state_fn()
+            if sampler_state is not None:
+                sampler_path = os.path.join(
+                    local_global_step_folder, "dynamic_sampler.json"
+                )
+                with open(sampler_path, "w") as f:
+                    json.dump(sampler_state, f, indent=2)
+
         # latest checkpointed iteration tracker (for atomic usage)
         if update_latest:
             local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
@@ -998,6 +1010,73 @@ class RayPPOTrainer:
         self.best_val_success = float(metadata["value"])
         print(f"Restored best validation success {self.best_val_success} from {metadata_path}")
 
+    def _maybe_save_best_train_success(self, train_metrics):
+        """Overwrite one checkpoint when training trajectory success improves."""
+        if not self.config.trainer.get("save_best_train_success", False):
+            return False
+
+        metric_name = self.config.trainer.get(
+            "best_train_success_metric", "episode/success_rate"
+        )
+        if metric_name not in train_metrics:
+            available = sorted(
+                key
+                for key in train_metrics
+                if key.startswith("episode/") and "success_rate" in key
+            )
+            raise KeyError(
+                f"Best training-checkpoint metric {metric_name!r} was not produced. "
+                f"Available training success metrics: {available}"
+            )
+
+        current = float(train_metrics[metric_name])
+        if current <= self.best_train_success:
+            return False
+
+        previous = self.best_train_success
+        checkpoint_name = "best_train_success"
+        checkpoint_path = os.path.join(
+            self.config.trainer.default_local_dir, checkpoint_name
+        )
+        # A fixed directory keeps exactly one best-training checkpoint.
+        if os.path.exists(checkpoint_path):
+            shutil.rmtree(checkpoint_path)
+        self._save_checkpoint(checkpoint_name=checkpoint_name, update_latest=False)
+        self.best_train_success = current
+        metadata_path = os.path.join(checkpoint_path, "best_train_success.json")
+        with open(metadata_path, "w") as f:
+            json.dump(
+                {
+                    "metric": metric_name,
+                    "value": current,
+                    "global_step": self.global_steps,
+                },
+                f,
+                indent=2,
+            )
+        print(
+            f"Best training success improved from {previous} to {current}; "
+            f"saved {checkpoint_path}"
+        )
+        return True
+
+    def _load_best_train_success(self):
+        """Restore the best training score so a worse run cannot replace it."""
+        metadata_path = os.path.join(
+            self.config.trainer.default_local_dir,
+            "best_train_success",
+            "best_train_success.json",
+        )
+        if not os.path.exists(metadata_path):
+            return
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        self.best_train_success = float(metadata["value"])
+        print(
+            f"Restored best training success {self.best_train_success} "
+            f"from {metadata_path}"
+        )
+
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
             return 0
@@ -1030,10 +1109,18 @@ class RayPPOTrainer:
         if checkpoint_basename.startswith("global_step_"):
             self.global_steps = int(checkpoint_basename.removeprefix("global_step_"))
         else:
-            metadata_path = os.path.join(global_step_folder, "best_val_success.json")
-            if not os.path.exists(metadata_path):
+            metadata_paths = [
+                os.path.join(global_step_folder, "best_val_success.json"),
+                os.path.join(global_step_folder, "best_train_success.json"),
+            ]
+            metadata_path = next(
+                (path for path in metadata_paths if os.path.exists(path)),
+                None,
+            )
+            if metadata_path is None:
                 raise ValueError(
-                    "A non-global_step checkpoint must contain best_val_success.json: "
+                    "A non-global_step checkpoint must contain "
+                    "best_val_success.json or best_train_success.json: "
                     f"{global_step_folder}"
                 )
             with open(metadata_path) as f:
@@ -1064,11 +1151,42 @@ class RayPPOTrainer:
         # load dataloader,
         # TODO: from remote not implemented yet
         dataloader_local_path = os.path.join(global_step_folder, "data.pt")
-        if os.path.exists(dataloader_local_path):
+        if (
+            self.config.trainer.get("resume_dataloader", True)
+            and os.path.exists(dataloader_local_path)
+        ):
             dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
             self.train_dataloader.load_state_dict(dataloader_state_dict)
+        elif os.path.exists(dataloader_local_path):
+            print(
+                "Skipping checkpoint dataloader state because "
+                "trainer.resume_dataloader=False"
+            )
         else:
             print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
+
+        sampler_local_path = os.path.join(global_step_folder, "dynamic_sampler.json")
+        load_sampler_state_fn = getattr(
+            getattr(self, "envs", None), "load_dynamic_sampler_state_dict", None
+        )
+        if os.path.exists(sampler_local_path):
+            if not callable(load_sampler_state_fn):
+                raise ValueError(
+                    "Checkpoint contains dynamic_sampler.json, but the configured "
+                    "environment cannot restore sampler state"
+                )
+            with open(sampler_local_path) as f:
+                load_sampler_state_fn(json.load(f))
+            print(f"Restored dynamic seed sampler from {sampler_local_path}")
+        elif callable(load_sampler_state_fn):
+            sampler_state_fn = getattr(
+                getattr(self, "envs", None), "dynamic_sampler_state_dict", None
+            )
+            if callable(sampler_state_fn) and sampler_state_fn() is not None:
+                print(
+                    "Warning: adaptive seed sampling is enabled, but the checkpoint "
+                    "has no dynamic_sampler.json; starting sampler statistics fresh"
+                )
 
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix="global_seqlen"):
         """Reorder the data on single controller such that each dp rank gets similar total tokens"""
@@ -1103,11 +1221,14 @@ class RayPPOTrainer:
 
         self.global_steps = 0
         self.best_val_success = float("-inf")
+        self.best_train_success = float("-inf")
 
         # load checkpoint before doing anything
         self._load_checkpoint()
         if self.config.trainer.get("save_best_val_success", False):
             self._load_best_val_success()
+        if self.config.trainer.get("save_best_train_success", False):
+            self._load_best_train_success()
 
         # perform validation before training
         # currently, we only support validation using the reward_function.
@@ -1174,6 +1295,11 @@ class RayPPOTrainer:
                                                                 is_train=True,
                                                                 wandb_step=self.global_steps,
                                                                 )
+                        sampler_metrics = gen_batch_output.meta_info.pop(
+                            "dynamic_sampler_metrics", {}
+                        )
+                        if sampler_metrics:
+                            metrics.update(sampler_metrics)
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         with _timer("gen_max", timing_raw):
                             gen_baseline_batch = deepcopy(gen_batch)
@@ -1378,6 +1504,7 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                self._maybe_save_best_train_success(metrics)
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
