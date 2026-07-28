@@ -196,7 +196,7 @@ def _object_names_by_location(ui: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[
 
 
 def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical_n: int = 2) -> List[str]:
-    """Return phase-valid skills without belief-based action filtering."""
+    """Return physically valid skills without belief-based target filtering."""
     info = info or {}
     ui = (info.get("raw_observation") or {}).get("ui", {})
     inv_objects, accessible_objects = _object_names_by_location(ui)
@@ -244,14 +244,21 @@ def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical
         if chemical_total < max_chemical_n:
             return [USE_DISPENSER_A, USE_DISPENSER_B, USE_DISPENSER_C, USE_DISPENSER_D]
 
-        # Expose every remove action, including chemicals currently at zero.
-        # Removing an absent chemical is an executable no-op whose low reward
-        # should be learned by RL, not ruled out by a hand-written controller.
+        # Removing an absent chemical cannot change the state. Mask only those
+        # physically impossible no-ops; all present chemicals remain equally
+        # available, without belief- or teacher-based recommendations.
         return [
-            REMOVE_CHEMICAL_A,
-            REMOVE_CHEMICAL_B,
-            REMOVE_CHEMICAL_C,
-            REMOVE_CHEMICAL_D,
+            skill
+            for name, skill in zip(
+                CHEMICAL_NAMES,
+                (
+                    REMOVE_CHEMICAL_A,
+                    REMOVE_CHEMICAL_B,
+                    REMOVE_CHEMICAL_C,
+                    REMOVE_CHEMICAL_D,
+                ),
+            )
+            if int(chemical_dict.get(name, 0) or 0) > 0
         ]
 
     return list(ORDERED_SKILL_NAMES)

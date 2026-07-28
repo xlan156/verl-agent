@@ -33,7 +33,7 @@ class SeedStats:
 class DynamicSeedSampler:
     """Sample hard-but-informative seeds while retaining uniform replay."""
 
-    STATE_VERSION = 2
+    STATE_VERSION = 3
 
     def __init__(
         self,
@@ -46,12 +46,21 @@ class DynamicSeedSampler:
         if not self.seeds:
             raise ValueError("DynamicSeedSampler requires at least one seed")
 
-        self.uniform_ratio = float(cfg.get("uniform_ratio", 0.4))
+        self.uniform_ratio = float(cfg.get("uniform_ratio", 0.15))
         self.ema_alpha = float(cfg.get("ema_alpha", 0.2))
-        self.hardness_alpha = float(cfg.get("hardness_alpha", 1.0))
+        self.hardness_alpha = float(cfg.get("hardness_alpha", 2.0))
         self.min_attempts_per_seed = int(cfg.get("min_attempts_per_seed", 2))
         self.max_probability_per_seed = float(cfg.get("max_probability_per_seed", 0.2))
         self.min_informativeness = float(cfg.get("min_informativeness", 0.2))
+        replacement_value = cfg.get("sample_with_replacement", True)
+        if isinstance(replacement_value, str):
+            replacement_value = replacement_value.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        self.sample_with_replacement = bool(replacement_value)
         # DiscoveryWorld scales its monotonic normalized score by 25. A scale
         # of 5 keeps ordinary ~0.08 progress steps distinguishable instead of
         # saturating the informativeness term immediately, while terminal
@@ -73,6 +82,10 @@ class DynamicSeedSampler:
         self.stats: Dict[int, SeedStats] = {seed: SeedStats() for seed in self.seeds}
         self.total_groups = 0
         self.total_trajectories = 0
+        self.total_sample_batches = 0
+        self.total_sampled_groups = 0
+        self.batches_with_replacement = 0
+        self.duplicate_selections = 0
         self._rng = np.random.default_rng(int(rng_seed))
         self._last_probabilities = np.full(len(self.seeds), 1.0 / len(self.seeds))
 
@@ -166,26 +179,38 @@ class DynamicSeedSampler:
         remaining = num_groups - len(selected)
         if remaining > 0:
             probabilities = self.probabilities()
-            available = [seed for seed in self.seeds if seed not in selected]
-            replace = remaining > len(available)
-            if available:
-                indices = [self.seeds.index(seed) for seed in available]
-                available_p = probabilities[indices]
-                available_p /= available_p.sum()
-                sampled = self._rng.choice(
-                    available,
-                    size=remaining,
-                    replace=replace,
-                    p=available_p,
-                )
-            else:
+            # Preserve deterministic coverage while any seed is still in its
+            # warmup phase. Once warmup is complete, replacement lets a single
+            # batch allocate multiple groups to hard seeds instead of merely
+            # choosing which easy seeds to omit.
+            use_adaptive_replacement = (
+                self.sample_with_replacement and not selected
+            )
+            if use_adaptive_replacement:
                 sampled = self._rng.choice(
                     self.seeds,
                     size=remaining,
                     replace=True,
                     p=probabilities,
                 )
+            else:
+                available = [seed for seed in self.seeds if seed not in selected]
+                indices = [self.seeds.index(seed) for seed in available]
+                available_p = probabilities[indices]
+                available_p /= available_p.sum()
+                replace = remaining > len(available)
+                sampled = self._rng.choice(
+                    available,
+                    size=remaining,
+                    replace=replace,
+                    p=available_p,
+                )
             selected.extend(int(seed) for seed in np.atleast_1d(sampled))
+        duplicate_count = len(selected) - len(set(selected))
+        self.total_sample_batches += 1
+        self.total_sampled_groups += len(selected)
+        self.batches_with_replacement += int(duplicate_count > 0)
+        self.duplicate_selections += duplicate_count
         return selected
 
     def observe_group(
@@ -263,6 +288,16 @@ class DynamicSeedSampler:
             "seed_sampler/probability_entropy": float(
                 -(probabilities * np.log(probabilities + 1e-12)).sum()
             ),
+            "seed_sampler/replacement_batch_rate": (
+                self.batches_with_replacement / self.total_sample_batches
+                if self.total_sample_batches
+                else 0.0
+            ),
+            "seed_sampler/duplicate_selection_rate": (
+                self.duplicate_selections / self.total_sampled_groups
+                if self.total_sampled_groups
+                else 0.0
+            ),
         }
         total_accepted = 0
         total_rejected = 0
@@ -297,6 +332,7 @@ class DynamicSeedSampler:
                 "hardness_alpha": self.hardness_alpha,
                 "min_attempts_per_seed": self.min_attempts_per_seed,
                 "max_probability_per_seed": self.max_probability_per_seed,
+                "sample_with_replacement": self.sample_with_replacement,
                 "min_informativeness": self.min_informativeness,
                 "reward_std_scale": self.reward_std_scale,
                 "progress_weight": self.progress_weight,
@@ -304,6 +340,10 @@ class DynamicSeedSampler:
             "stats": {str(seed): asdict(stat) for seed, stat in self.stats.items()},
             "total_groups": self.total_groups,
             "total_trajectories": self.total_trajectories,
+            "total_sample_batches": self.total_sample_batches,
+            "total_sampled_groups": self.total_sampled_groups,
+            "batches_with_replacement": self.batches_with_replacement,
+            "duplicate_selections": self.duplicate_selections,
             "rng_state": self._rng.bit_generator.state,
         }
 
@@ -323,5 +363,11 @@ class DynamicSeedSampler:
                 self.stats[seed] = SeedStats(**saved)
         self.total_groups = int(state.get("total_groups", 0))
         self.total_trajectories = int(state.get("total_trajectories", 0))
+        self.total_sample_batches = int(state.get("total_sample_batches", 0))
+        self.total_sampled_groups = int(state.get("total_sampled_groups", 0))
+        self.batches_with_replacement = int(
+            state.get("batches_with_replacement", 0)
+        )
+        self.duplicate_selections = int(state.get("duplicate_selections", 0))
         if "rng_state" in state:
             self._rng.bit_generator.state = dict(state["rng_state"])

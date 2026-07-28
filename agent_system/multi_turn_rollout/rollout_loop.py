@@ -429,6 +429,9 @@ class TrajectoryCollector:
                         "repetition_penalty": float(
                             reward_components.get("repetition", 0.0)
                         ),
+                        "action_status_penalty": float(
+                            reward_components.get("action_status", 0.0)
+                        ),
                         "completion_reward": float(
                             reward_components.get("completion", 0.0)
                         ),
@@ -732,6 +735,7 @@ class TrajectoryCollector:
                         "game_progress_reward",
                         "target_distance_reward",
                         "repetition_penalty",
+                        "action_status_penalty",
                         "completion_reward",
                         "done",
                         "prompt",
@@ -757,6 +761,7 @@ class TrajectoryCollector:
                             r.get("game_progress_reward"),
                             r.get("target_distance_reward"),
                             r.get("repetition_penalty"),
+                            r.get("action_status_penalty"),
                             r.get("completion_reward"),
                             r.get("done"),
                             r.get("prompt"),

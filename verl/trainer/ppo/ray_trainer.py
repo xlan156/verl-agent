@@ -1148,45 +1148,54 @@ class RayPPOTrainer:
         if self.use_critic:
             self.critic_wg.load_checkpoint(critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load)
 
-        # load dataloader,
-        # TODO: from remote not implemented yet
-        dataloader_local_path = os.path.join(global_step_folder, "data.pt")
-        if (
-            self.config.trainer.get("resume_dataloader", True)
-            and os.path.exists(dataloader_local_path)
-        ):
-            dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
-            self.train_dataloader.load_state_dict(dataloader_state_dict)
-        elif os.path.exists(dataloader_local_path):
+        # Evaluation only needs model weights. Dataloader and adaptive sampler
+        # state belong to the training trajectory and cannot be restored into
+        # the fixed-seed validation environment.
+        if self.config.trainer.get("val_only", False):
             print(
-                "Skipping checkpoint dataloader state because "
-                "trainer.resume_dataloader=False"
+                "Skipping checkpoint dataloader and dynamic sampler state for "
+                "val_only evaluation"
             )
         else:
-            print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
-
-        sampler_local_path = os.path.join(global_step_folder, "dynamic_sampler.json")
-        load_sampler_state_fn = getattr(
-            getattr(self, "envs", None), "load_dynamic_sampler_state_dict", None
-        )
-        if os.path.exists(sampler_local_path):
-            if not callable(load_sampler_state_fn):
-                raise ValueError(
-                    "Checkpoint contains dynamic_sampler.json, but the configured "
-                    "environment cannot restore sampler state"
-                )
-            with open(sampler_local_path) as f:
-                load_sampler_state_fn(json.load(f))
-            print(f"Restored dynamic seed sampler from {sampler_local_path}")
-        elif callable(load_sampler_state_fn):
-            sampler_state_fn = getattr(
-                getattr(self, "envs", None), "dynamic_sampler_state_dict", None
-            )
-            if callable(sampler_state_fn) and sampler_state_fn() is not None:
+            # load dataloader,
+            # TODO: from remote not implemented yet
+            dataloader_local_path = os.path.join(global_step_folder, "data.pt")
+            if (
+                self.config.trainer.get("resume_dataloader", True)
+                and os.path.exists(dataloader_local_path)
+            ):
+                dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
+                self.train_dataloader.load_state_dict(dataloader_state_dict)
+            elif os.path.exists(dataloader_local_path):
                 print(
-                    "Warning: adaptive seed sampling is enabled, but the checkpoint "
-                    "has no dynamic_sampler.json; starting sampler statistics fresh"
+                    "Skipping checkpoint dataloader state because "
+                    "trainer.resume_dataloader=False"
                 )
+            else:
+                print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
+
+            sampler_local_path = os.path.join(global_step_folder, "dynamic_sampler.json")
+            load_sampler_state_fn = getattr(
+                getattr(self, "envs", None), "load_dynamic_sampler_state_dict", None
+            )
+            if os.path.exists(sampler_local_path):
+                if not callable(load_sampler_state_fn):
+                    raise ValueError(
+                        "Checkpoint contains dynamic_sampler.json, but the configured "
+                        "environment cannot restore sampler state"
+                    )
+                with open(sampler_local_path) as f:
+                    load_sampler_state_fn(json.load(f))
+                print(f"Restored dynamic seed sampler from {sampler_local_path}")
+            elif callable(load_sampler_state_fn):
+                sampler_state_fn = getattr(
+                    getattr(self, "envs", None), "dynamic_sampler_state_dict", None
+                )
+                if callable(sampler_state_fn) and sampler_state_fn() is not None:
+                    print(
+                        "Warning: adaptive seed sampling is enabled, but the checkpoint "
+                        "has no dynamic_sampler.json; starting sampler statistics fresh"
+                    )
 
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix="global_seqlen"):
         """Reorder the data on single controller such that each dp rank gets similar total tokens"""
