@@ -3,7 +3,7 @@ import itertools
 import json
 import re
 
-from agent_system.environments.prompts.discoveryworld import (
+from .prompts import (
     DISCOVERYWORLD_TEMPLATE,
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
     format_current_chemicals,

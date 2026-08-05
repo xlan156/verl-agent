@@ -1,6 +1,6 @@
 import math
 
-from agent_system.environments.env_package.discovery.utils import *
+from .utils import *
 
 
 class RulebasedAgent:
@@ -278,7 +278,7 @@ class RulebasedAgentSkill:
     
 
 if __name__ == "__main__":
-    from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
+    from agent_system.environments.env_package.discovery.runtime.envs import DiscoveryWorldEnv
     env = DiscoveryWorldEnv(
         scenario_name="Combinatorial Chemistry",
         difficulty="Challenge",

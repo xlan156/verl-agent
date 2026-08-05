@@ -2,11 +2,11 @@ import random
 import re
 from typing import Any, Tuple
 
-from agent_system.environments.env_package.discovery.curriculum import (
+from .curriculum import (
     CHEMICAL_ORDER,
     normalize_chemical_state,
 )
-from agent_system.environments.env_package.discovery.utils import *
+from .utils import *
 
 class CombinatorialChemistrySkill():
     def __init__(self, env):
@@ -205,7 +205,7 @@ class CombinatorialChemistrySkill():
 
 
 if __name__ == "__main__":
-    from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
+    from agent_system.environments.env_package.discovery.runtime.envs import DiscoveryWorldEnv
     env = DiscoveryWorldEnv(scenario_name="Combinatorial Chemistry", difficulty="Challenge", seed=13, max_steps=50, max_chemical_n=2)
     _, info = env.reset()
     skill_agent = CombinatorialChemistrySkill(env)

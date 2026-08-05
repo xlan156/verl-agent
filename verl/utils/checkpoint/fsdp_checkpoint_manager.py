@@ -45,7 +45,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         processing_class (PreTrainedTokenizer or ProcessorMixin, optional):
             Pre-/post-processing artifact handler.
         checkpoint_contents (list[str], optional):
-            Components to include; must contain 'model', 'optimizer', 'extra'.
+            Components to load; supported values are 'model', 'optimizer', and
+            'extra'. Training defaults to all three, while inference can load
+            only the model weights.
     """
 
     def __init__(
@@ -63,7 +65,10 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             assert "tokenizer" in kwargs, "tokenizer or processor must be provided"
             warnings.warn("`tokenizer` is deprecated. use `processing_class` instead.", DeprecationWarning, stacklevel=2)
             processing_class = kwargs.pop("tokenizer")
-        assert "model" in checkpoint_contents and "optimizer" in checkpoint_contents and "extra" in checkpoint_contents, f"FSDPCheckpointManager must include ['model', 'optimizer', 'extra'], got {checkpoint_contents}"
+        supported_contents = {"model", "optimizer", "extra", "hf_model"}
+        unknown_contents = set(checkpoint_contents) - supported_contents
+        assert not unknown_contents, f"Unsupported FSDP checkpoint contents: {sorted(unknown_contents)}"
+        assert "model" in checkpoint_contents, "FSDPCheckpointManager must include 'model'"
 
         super().__init__(
             model,
@@ -77,9 +82,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         """
         Load an FSDP checkpoint for this rank.
 
-        Downloads and loads:
-          - model and optimizer shards
-          - extra state dict (scheduler + RNG)
+        Downloads and loads the shards selected by checkpoint_contents.
 
         Args:
             local_path: Directory with per-rank checkpoint files.
@@ -93,38 +96,48 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         remote_model_path = os.path.join(local_path, f"model_world_size_{self.world_size}_rank_{self.rank}.pt")
         remote_optim_path = os.path.join(local_path, f"optim_world_size_{self.world_size}_rank_{self.rank}.pt")
         remote_extra_state_path = os.path.join(local_path, f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt")
-        print(f"[rank-{self.rank}]: Loading from {remote_model_path} and {remote_optim_path} and {remote_extra_state_path}")
-        local_model_path = copy_to_local(remote_model_path)
-        local_optim_path = copy_to_local(remote_optim_path)
-        local_extra_state_path = copy_to_local(remote_extra_state_path)
+        remote_paths = {
+            "model": remote_model_path,
+            "optimizer": remote_optim_path,
+            "extra": remote_extra_state_path,
+        }
+        selected_contents = [name for name in ("model", "optimizer", "extra") if name in self.checkpoint_contents]
+        print(f"[rank-{self.rank}]: Loading checkpoint contents {selected_contents} from {local_path}")
+        local_paths = {name: copy_to_local(remote_paths[name]) for name in selected_contents}
 
-        model_state_dict = torch.load(local_model_path, weights_only=False)
-        optimizer_state_dict = torch.load(local_optim_path, weights_only=False)
-        extra_state_dict = torch.load(local_extra_state_path, weights_only=False)
+        model_state_dict = torch.load(local_paths["model"], weights_only=False)
+        optimizer_state_dict = (
+            torch.load(local_paths["optimizer"], weights_only=False)
+            if "optimizer" in local_paths
+            else None
+        )
+        extra_state_dict = (
+            torch.load(local_paths["extra"], weights_only=False)
+            if "extra" in local_paths
+            else None
+        )
 
         if del_local_after_load:
             try:
-                os.remove(local_model_path) if is_non_local(local_model_path) else None
-                os.remove(local_optim_path) if is_non_local(local_optim_path) else None
-                os.remove(local_extra_state_path) if is_non_local(local_extra_state_path) else None
+                for local_checkpoint_path in local_paths.values():
+                    if is_non_local(local_checkpoint_path):
+                        os.remove(local_checkpoint_path)
             except Exception as e:
                 print(f"[rank-{self.rank}]: remove local resume ckpt file after loading failed, exception {e} will be ignored")
-
-        lr_scheduler_state_dict = extra_state_dict["lr_scheduler"]
 
         state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True if is_cuda_available else False)
         optim_cfg = ShardedOptimStateDictConfig(offload_to_cpu=True if is_cuda_available else False)
         with get_fsdp_state_ctx(self.model, StateDictType.SHARDED_STATE_DICT, state_dict_cfg, optim_cfg):
             self.model.load_state_dict(model_state_dict)
-            if self.optimizer is not None:
+            if optimizer_state_dict is not None and self.optimizer is not None:
                 self.optimizer.load_state_dict(optimizer_state_dict)
         # recover random state
-        if "rng" in extra_state_dict:
+        if extra_state_dict is not None and "rng" in extra_state_dict:
             # 'rng' may not exist for backward compatibility
             self.load_rng_state(extra_state_dict["rng"])
 
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.load_state_dict(lr_scheduler_state_dict)
+        if extra_state_dict is not None and self.lr_scheduler is not None:
+            self.lr_scheduler.load_state_dict(extra_state_dict["lr_scheduler"])
 
     def save_checkpoint(self, local_path: str, hdfs_path: str = None, global_step: int = 0, max_ckpt_to_keep=None):
         """

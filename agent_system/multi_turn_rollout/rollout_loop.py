@@ -347,6 +347,8 @@ class TrajectoryCollector:
         episode_rewards = np.zeros(batch_size, dtype=np.float32)
         episode_task_rewards = np.zeros(batch_size, dtype=np.float32)
         tool_callings = np.zeros(batch_size, dtype=np.float32)
+        print_episode_progress = bool(gen_batch.meta_info.get("validate", False))
+        completed_episodes = 0
         # Trajectory collection loop
         for _step in range(self.config.env.max_steps):
             active_masks = np.logical_not(is_done)
@@ -442,7 +444,10 @@ class TrajectoryCollector:
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
                         "action_status": str(info_i.get("action_status", "")),
-                        "post_key_rust_status": str(info_i.get("key_rust_status", "")),
+                        "task_family": str(info_i.get("task_family", "")),
+                        "task_state": _truncate(json.dumps(
+                            info_i.get("llm_step_state", {}), sort_keys=True, default=str
+                        )),
                         "response_format_score": float(info_i.get("response_format_score", 0.0)),
                         "post_won": bool(info_i.get("won", False)),
                     }
@@ -487,7 +492,17 @@ class TrajectoryCollector:
                 total_infos[i].append(infos[i])
 
             # Update done states
+            newly_done = np.logical_and(active_masks, dones)
             is_done = np.logical_or(is_done, dones)
+            if print_episode_progress:
+                for i in np.flatnonzero(newly_done):
+                    completed_episodes += 1
+                    print(
+                        f"[eval] episode {completed_episodes}/{batch_size} "
+                        f"seed={infos[i].get('seed', '?')} steps={int(episode_lengths[i])} "
+                        f"reward={float(episode_rewards[i]):.3f} status=done",
+                        flush=True,
+                    )
                 
             # Update observations for next step
             obs = next_obs
@@ -495,6 +510,16 @@ class TrajectoryCollector:
             # Break if all environments are done
             if is_done.all():
                 break
+
+        if print_episode_progress:
+            for i in np.flatnonzero(np.logical_not(is_done)):
+                completed_episodes += 1
+                print(
+                    f"[eval] episode {completed_episodes}/{batch_size} "
+                    f"seed={infos[i].get('seed', '?')} steps={int(episode_lengths[i])} "
+                    f"reward={float(episode_rewards[i]):.3f} status=max_steps",
+                    flush=True,
+                )
         
         success: Dict[str, np.ndarray] = envs.success_evaluator(
                     total_infos=total_infos,
@@ -744,7 +769,8 @@ class TrajectoryCollector:
                         "is_action_valid",
                         "teacher_skill",
                         "action_status",
-                        "post_key_rust_status",
+                        "task_family",
+                        "task_state",
                         "response_format_score",
                         "post_won",
                     ]
@@ -770,7 +796,8 @@ class TrajectoryCollector:
                             r.get("is_action_valid"),
                             r.get("teacher_skill"),
                             r.get("action_status"),
-                            r.get("post_key_rust_status"),
+                            r.get("task_family"),
+                            r.get("task_state"),
                             r.get("response_format_score"),
                             r.get("post_won"),
                         )

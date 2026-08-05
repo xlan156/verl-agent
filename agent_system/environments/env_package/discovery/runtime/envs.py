@@ -18,19 +18,15 @@ from agent_system.environments.env_package.discovery.config import (
     coerce_bool,
     coerce_max_chemical_n,
 )
-from agent_system.environments.env_package.discovery.rewards import DiscoveryWorldRewardMixin
-from agent_system.environments.env_package.discovery.seed import build_ordered_seed_pools_by_amount
+from agent_system.environments.env_package.discovery.runtime.rewards import DiscoveryWorldRewardMixin
+from agent_system.environments.env_package.discovery.chemistry.seed import build_ordered_seed_pools_by_amount
 from agent_system.environments.env_package.discovery.dynamic_sampler import DynamicSeedSampler
-from agent_system.environments.env_package.discovery.rule_based_agent import RulebasedAgentSkill
-from agent_system.environments.env_package.discovery.skills import CombinatorialChemistrySkill
-from agent_system.environments.env_package.discovery.utils import (
-    SKILL_NAMES,
+from agent_system.environments.env_package.discovery.task_registry import (
+    get_task_adapter,
+    task_family_for_scenario,
+)
+from agent_system.environments.env_package.discovery.common import (
     compress_ui_observation,
-    extract_detailed_status,
-    format_rust_level,
-    is_dispenser_skill,
-    is_remove_skill,
-    reaction_signal_for_tuples,
 )
 
 
@@ -74,6 +70,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._frames_dir = frames_dir
         self._max_chemical_n = int(max_chemical_n) if max_chemical_n is not None else 2
         self._teacher_skill_reward_coef = float(teacher_skill_reward_coef)
+        self._task_adapter = get_task_adapter(scenario_name)
         self._hidden_chemical_target: Optional[Tuple[int, ...]] = None
         self._api: Optional[DiscoveryWorldAPI] = None
         self._steps: int = 0
@@ -87,12 +84,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         if self._frames_dir:
             self._api.FRAME_DIR = os.path.join(self._frames_dir, f"thread-{self._thread_id}")
         
-        scenario_args = {
-            "numChemicals": 4,
-            "minChemicals": 1,
-            "chemicalMinAmount": self._max_chemical_n,
-            "chemicalMaxAmount": self._max_chemical_n,
-        }
+        scenario_args = self._task_adapter.scenario_args(self)
         ok = self._api.loadScenario(
             scenarioName=self._scenario_name,
             difficultyStr=self._difficulty,
@@ -111,12 +103,11 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self.action_history: List[Optional[str]] = []
         self.location_history: List[Tuple[Optional[int], Optional[int]]] = []
 
-        self._skill_runner = CombinatorialChemistrySkill(self)
-        self.teacher = RulebasedAgentSkill(self)
+        self._task_adapter.initialize(self)
+        self._skill_runner = self._task_adapter.create_skill_runner(self)
+        self.teacher = self._task_adapter.create_teacher(self)
         self._last_teacher_skill: Optional[str] = None
         self._last_info: Optional[Dict[str, Any]] = None
-
-        self.used_dispensers = {"A": False, "B": False, "C": False, "D": False}
 
     def _read_hidden_chemical_target(self) -> Optional[Tuple[int, ...]]:
         """Read the simulator-only target without exposing it in observations."""
@@ -157,11 +148,10 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
             "score_normalized": self._score_normalized(),
             "train_epoch": self.train_epoch,
             "max_chemical_n": self._max_chemical_n,
+            "task_family": self._task_adapter.family,
         }
 
         info["won"] = bool(self._api.areTasksComplete())
-        # include env-level non-UI state
-        info["used_dispensers"] = dict(self.used_dispensers)
 
         return text_obs, info
 
@@ -171,27 +161,12 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self.location_history.append(location)
 
     def _update_state_from_info(self, info: Dict[str, Any]) -> None:
-        """Update location history and compute+inject key/jar state from raw UI."""
+        """Update common location history and task-specific observable state."""
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_location_history(ui)
 
-        has_key, has_jar, is_key_in_jar, chemical_dict, key_rust_level = extract_detailed_status(ui)
-        info["has_key"] = has_key
-        info["has_jar"] = has_jar
-        info["is_key_in_jar"] = is_key_in_jar
-        info["chemical_dict"] = deepcopy(chemical_dict)
-        info["key_rust_level"] = key_rust_level
-        info["key_rust_status"] = format_rust_level(key_rust_level)
-        info["key_is_rusted"] = (
-            None if key_rust_level is None else key_rust_level != "no rust"
-        )
-        mixture = tuple(int(chemical_dict.get(name, 0) or 0) for name in ("A", "B", "C", "D"))
-        if is_key_in_jar and any(mixture) and self._hidden_chemical_target is not None:
-            info["current_reaction_signal"] = reaction_signal_for_tuples(
-                mixture, self._hidden_chemical_target
-            )
-        else:
-            info["current_reaction_signal"] = "not tested"
+        self._task_adapter.enrich_info(self, info)
+        info["valid_skills"] = self._task_adapter.valid_skills(info, self)
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
         """Reset environment and return initial observation and info."""
@@ -201,7 +176,10 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._last_action_result = None
 
         self.init_reward_shaping()
-        self._hidden_chemical_target = self._read_hidden_chemical_target()
+        self._hidden_chemical_target = (
+            self._read_hidden_chemical_target()
+            if self._task_adapter.family == "chemistry" else None
+        )
         text_obs, info = self._format_obs_and_info()
         ui = (info.get("raw_observation") or {}).get("ui", {})
         self._update_state_from_info(info)
@@ -222,7 +200,11 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         assert self._api is not None
 
         action_text = action
-        skill_name = action_text if isinstance(action_text, str) and action_text in SKILL_NAMES else None
+        skill_name = (
+            action_text
+            if isinstance(action_text, str) and self._task_adapter.accepts(action_text)
+            else None
+        )
         is_valid = bool(skill_name)
 
         # No skill extracted (``None`` from projection) is an intentional
@@ -248,20 +230,10 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
 
         # Valid action: execute skill
         if self._skill_runner is None:
-            self._skill_runner = CombinatorialChemistrySkill(self)
+            self._skill_runner = self._task_adapter.create_skill_runner(self)
 
         try:
-            skill_fn = self._skill_runner.skill_mapping.get(skill_name)
-            if skill_fn is None:
-                raise ValueError(f"Unknown skill: {skill_name}")
-
-            skill_fn()
-            # A dispenser tick updates the jar's Substance mixture after the
-            # key has already evaluated it. Settle once more before exposing
-            # the transition so the returned rust state describes the action
-            # that was just executed, rather than the preceding mixture.
-            if is_dispenser_skill(skill_name) or is_remove_skill(skill_name):
-                self._skill_runner.settle_reactions(max_ticks=1)
+            self._task_adapter.execute(self._skill_runner, skill_name)
             self.action_history.append(skill_name)
             success = bool((self._last_action_result or {}).get("success", False))
             action_status = "success" if success else "valid_but_failed"
@@ -376,12 +348,22 @@ class DiscoveryWorldVectorEnv:
         self._max_chemical_n = coerce_max_chemical_n(env_kwargs)
         self._target_train_fraction = float(env_kwargs.get("target_train_fraction", 0.8))
         self._env_variant = str(env_kwargs.get("env_variant", "original")).strip().lower()
-        self._target_seed_pools = build_ordered_seed_pools_by_amount(
-            max_amount=self._max_chemical_n,
-            num_chemicals=4,
-            min_chemicals=1,
-            train_fraction=self._target_train_fraction,
-        )
+        self._task_family = task_family_for_scenario(env_kwargs.get("scenario_name"))
+        if self._task_family == "chemistry":
+            self._target_seed_pools = build_ordered_seed_pools_by_amount(
+                max_amount=self._max_chemical_n,
+                num_chemicals=4,
+                min_chemicals=1,
+                train_fraction=self._target_train_fraction,
+            )
+        else:
+            split = max(1, int(100 * self._target_train_fraction))
+            self._target_seed_pools = {
+                self._max_chemical_n: {
+                    "train": list(range(0, split)),
+                    "val": list(range(split, 100)),
+                }
+            }
         self._train_seed_pool = env_kwargs.get("train_seed_pool")
         self._eval_seed_pool = env_kwargs.get("eval_seed_pool")
         dynamic_sampler_config = dict(env_kwargs.get("dynamic_sampler") or {})
@@ -629,7 +611,7 @@ def _select_discoveryworld_env_cls(env_variant: Optional[str]):
     if variant in {"", "original", "default", "full"}:
         return DiscoveryWorldEnv
     if variant in {"pickjar", "pick_jar", "pick-jar", "jar"}:
-        from agent_system.environments.env_package.discovery.env_variants import CCEnvPickJar
+        from agent_system.environments.env_package.discovery.chemistry.env_variants import CCEnvPickJar
 
         return CCEnvPickJar
     if variant in {
@@ -643,7 +625,7 @@ def _select_discoveryworld_env_cls(env_variant: Optional[str]):
         "lightly-rust",
         "lightlyrusted",
     }:
-        from agent_system.environments.env_package.discovery.env_variants import CCEnvDerustToModerate
+        from agent_system.environments.env_package.discovery.chemistry.env_variants import CCEnvDerustToModerate
 
         return CCEnvDerustToModerate
     raise ValueError(

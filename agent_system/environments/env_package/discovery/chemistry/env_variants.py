@@ -3,8 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
-from agent_system.environments.env_package.discovery.envs import DiscoveryWorldEnv
-from agent_system.environments.env_package.discovery.utils import (
+from agent_system.environments.env_package.discovery.runtime.envs import DiscoveryWorldEnv
+from .utils import (
     RUST_LABEL_TO_LEVEL,
     extract_detailed_status,
     format_rust_level,

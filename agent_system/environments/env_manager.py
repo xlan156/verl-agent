@@ -26,11 +26,11 @@ from omegaconf import OmegaConf
 
 from agent_system.environments.prompts import *
 from agent_system.environments.base import EnvironmentManagerBase, to_numpy
-from agent_system.environments.env_package.discovery.utils import (
-    all_action_abbr,
+from agent_system.environments.env_package.discovery.orchestration import (
     build_discoveryworld_anchor_obs,
     build_discoveryworld_text_obs,
-    observable_experiment_evidence,
+    build_llm_step_state,
+    build_memory_record,
 )
 from agent_system.memory import SimpleMemory, SearchMemory
 
@@ -638,7 +638,6 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
         super().__init__(envs, projection_f, config)
-        self.action_abbr = list(all_action_abbr.keys())
 
     def reset(self, kwargs):
         text_obs, infos = self.envs.reset(kwargs=kwargs)
@@ -654,7 +653,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
 
     def step(self, text_actions: List[str]):
         actions, valids = self.projection_f(text_actions, self.last_infos)
-        from agent_system.environments.env_package.discovery.projection import response_format_score
+        from agent_system.environments.env_package.discovery.runtime.projection import response_format_score
 
         # Formatting is a single diagnostic signal. It is intentionally kept
         # outside the environment reward; projected action validity separately
@@ -668,30 +667,13 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             action if action is not None else "<invalid format: no action executed>"
             for action in actions
         ]
-        experiment_evidence = [
-            observable_experiment_evidence(previous, current)
-            for previous, current in zip(self.last_infos, infos)
+        records = [
+            build_memory_record(previous, current, action, previous_obs)
+            for previous, current, action, previous_obs in zip(
+                self.last_infos, infos, history_actions, self.pre_text_obs
+            )
         ]
-        self.memory.store({
-            "text_obs": self.pre_text_obs,
-            "action": history_actions,
-            "pre_chemical_dict": [info.get("chemical_dict") for info in self.last_infos],
-            "post_chemical_dict": [info.get("chemical_dict") for info in infos],
-            "pre_rust_level": [info.get("key_rust_level") for info in self.last_infos],
-            "pre_rust_status": [info.get("key_rust_status") for info in self.last_infos],
-            "pre_reaction_signal": [
-                info.get("current_reaction_signal") for info in self.last_infos
-            ],
-            "rust_level": [info.get("key_rust_level") for info in infos],
-            "rust_status": [info.get("key_rust_status") for info in infos],
-            "reaction_signal": [info.get("current_reaction_signal") for info in infos],
-            "experiment_evidence_kind": [
-                evidence.get("kind") if evidence else None for evidence in experiment_evidence
-            ],
-            "experiment_evidence_label": [
-                evidence.get("label") if evidence else None for evidence in experiment_evidence
-            ],
-        })
+        self.memory.store({key: [record[key] for record in records] for key in records[0]})
         self.pre_text_obs = text_obs
         self.last_infos = infos
 
@@ -703,6 +685,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             # The trainer consumes action validity for its invalid-action
             # penalty; response_format_score only describes response syntax.
             info["response_format_score"] = float(format_scores[i])
+            info["llm_step_state"] = build_llm_step_state(info)
 
         anchor_obs = build_discoveryworld_anchor_obs(text_obs, infos, self.memory, self.config)
         next_observations = {"text": full_text_obs, "image": None, "anchor": anchor_obs}

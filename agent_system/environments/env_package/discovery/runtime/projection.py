@@ -10,12 +10,6 @@ both the ``think`` and ``action`` portions of the policy.
 from typing import Any, Dict, List, Optional, Tuple
 import re
 
-from agent_system.environments.env_package.discovery.utils import (
-    SKILL_NAMES,
-    get_valid_discoveryworld_skills,
-)
-
-
 # The anchors deliberately reject extra prose, a second action, or an action
 # before reasoning.  Whitespace around tags is harmless, while an empty think
 # block is not accepted: this is an initialization task that should learn to
@@ -42,7 +36,7 @@ def _extract_skill(response: Any) -> Optional[str]:
     # Skill identifiers are case-sensitive because they are names in the
     # environment's skill map.  The tags themselves stay case-insensitive.
     skill = match.group("action").strip()
-    return skill if skill in SKILL_NAMES else None
+    return skill
 
 
 def response_format_score(response: Any) -> float:
@@ -57,7 +51,7 @@ def response_format_score(response: Any) -> float:
     strict_match = _THINK_ACTION_RE.fullmatch(response)
     if strict_match is not None:
         skill = strict_match.group("action").strip()
-        if strict_match.group("think").strip() and skill in SKILL_NAMES:
+        if strict_match.group("think").strip() and skill:
             return 1.0
 
     think_blocks = list(_THINK_BLOCK_RE.finditer(response))
@@ -67,7 +61,7 @@ def response_format_score(response: Any) -> float:
     # yet produced the complete, clean two-block response.
     if len(action_blocks) == 1:
         action = action_blocks[0].group("action").strip()
-        if action in SKILL_NAMES:
+        if re.fullmatch(r"[A-Za-z0-9_]+", action):
             if len(think_blocks) == 1 and think_blocks[0].group("think").strip():
                 return 0.75
             return 0.50
@@ -107,15 +101,7 @@ def discoveryworld_projection(
         skill = _extract_skill(response)
         if skill is not None and info is not None:
             prompt_valid_skills = (info or {}).get("valid_skills")
-            if prompt_valid_skills is not None:
-                # Use the exact phase-valid set shown to the policy. It is
-                # deliberately independent of chemical belief/history.
-                valid_skills = set(prompt_valid_skills)
-            else:
-                max_chemical_n = int((info or {}).get("max_chemical_n", 2) or 2)
-                valid_skills = set(
-                    get_valid_discoveryworld_skills(info, max_chemical_n=max_chemical_n)
-                )
+            valid_skills = set(prompt_valid_skills or [])
             if skill not in valid_skills:
                 skill = None
         processed.append(skill)

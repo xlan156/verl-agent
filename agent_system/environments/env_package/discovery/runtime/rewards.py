@@ -5,9 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from agent_system.environments.env_package.discovery.utils import (
-    CHEMICAL_NAMES,
-    chemical_counts,
+from agent_system.environments.env_package.discovery.common import (
     compress_ui_observation,
 )
 
@@ -66,55 +64,11 @@ class DiscoveryWorldRewardMixin:
             return 1.0
         return 0.0
 
-    @staticmethod
-    def _chemical_combination(info: Optional[Dict[str, Any]]) -> Tuple[int, int, int, int]:
-        counts = chemical_counts((info or {}).get("chemical_dict"))
-        return tuple(counts[name] for name in CHEMICAL_NAMES)
-
     def _target_distance_reward(self, info: Dict) -> float:
-        """Reward one-step L1 progress toward the simulator's hidden target."""
-        target = getattr(self, "_hidden_chemical_target", None)
-        if target is None:
-            return 0.0
-        previous = self._chemical_combination(self._last_info)
-        current = self._chemical_combination(info)
-        before_distance = sum(
-            abs(value - goal) for value, goal in zip(previous, target)
-        )
-        after_distance = sum(
-            abs(value - goal) for value, goal in zip(current, target)
-        )
-        return 2.0 * float(before_distance - after_distance)
+        return float(self._task_adapter.target_progress_reward(self, info))
 
-    @staticmethod
-    def _reward_state_signature(info: Optional[Dict[str, Any]]) -> Tuple[Any, ...]:
-        """Return the observable state used to make dense rewards one-shot."""
-        info = info or {}
-        ui = (info.get("raw_observation") or {}).get("ui", {})
-        agent_location = ui.get("agentLocation") or {}
-        is_key_in_jar = bool(info.get("is_key_in_jar", False))
-        # Chemical skills move to dispensers and the wash station internally.
-        # Once the key is in the jar those coordinates are implementation
-        # details, not new experimental states. Ignoring them closes loops
-        # that revisit the same mixture from a different dispenser location.
-        location = (
-            (None, None, None)
-            if is_key_in_jar
-            else (
-                agent_location.get("x"),
-                agent_location.get("y"),
-                agent_location.get("faceDirection"),
-            )
-        )
-        return (
-            *location,
-            bool(info.get("has_key", False)),
-            bool(info.get("has_jar", False)),
-            is_key_in_jar,
-            DiscoveryWorldRewardMixin._chemical_combination(info),
-            info.get("key_rust_status"),
-            bool(info.get("won", False)),
-        )
+    def _task_reward_state_signature(self, info: Optional[Dict[str, Any]]) -> Tuple[Any, ...]:
+        return self._task_adapter.state_signature(info)
 
     def _state_novelty(self, info: Dict[str, Any]) -> Tuple[bool, bool]:
         """Return ``(changed, novel)`` and remember states within this episode."""
@@ -122,11 +76,11 @@ class DiscoveryWorldRewardMixin:
         # so keeping the set there avoids reward memory leaking across episodes.
         seen = getattr(self.teacher, "_reward_seen_state_signatures", None)
         if seen is None:
-            seen = {self._reward_state_signature(self._last_info)}
+            seen = {self._task_reward_state_signature(self._last_info)}
             self.teacher._reward_seen_state_signatures = seen
 
-        previous = self._reward_state_signature(self._last_info)
-        current = self._reward_state_signature(info)
+        previous = self._task_reward_state_signature(self._last_info)
+        current = self._task_reward_state_signature(info)
         changed = current != previous
         novel = changed and current not in seen
         seen.add(current)
