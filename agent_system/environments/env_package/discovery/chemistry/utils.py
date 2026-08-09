@@ -6,8 +6,6 @@ import re
 from .prompts import (
     DISCOVERYWORLD_TEMPLATE,
     DISCOVERYWORLD_TEMPLATE_NO_HIS,
-    format_current_chemicals,
-    format_key_status,
 )
 
 from agent_system.environments.env_package.discovery.config import (
@@ -743,26 +741,47 @@ def build_discoveryworld_text_obs(
         getattr(discovery_cfg, "max_chemical_N", getattr(discovery_cfg, "chemical_N", 2)),
     )
     results = []
-    for i, raw_obs in enumerate(text_obs):
+    for i, _raw_obs in enumerate(text_obs):
         records = memory[i] if i < len(memory) else []
-        state_obs = raw_obs.replace("\\n", "\n")
+        info = infos[i]
+        counts = chemical_counts(info.get("chemical_dict"))
+        mixture = tuple(counts[name] for name in CHEMICAL_NAMES)
+        chemical_amount = sum(mixture)
+        rust_status = str(info.get("key_rust_status") or "unknown").strip().lower()
+        reaction_signal = str(
+            info.get("current_reaction_signal") or "not tested"
+        ).strip().lower()
+
+        if rust_status == "no rust":
+            phase = "open_door"
+        elif info.get("is_key_in_jar"):
+            phase = "chemical_experiment"
+        elif info.get("has_key") and info.get("has_jar"):
+            phase = "prepare_experiment"
+        elif info.get("has_key"):
+            phase = "collect_jar"
+        else:
+            phase = "find_key"
+
+        state_obs = "\n".join((
+            f"Step: {len(records)} / {config.env.max_steps}",
+            f"Phase: {phase}",
+            f"Key: {rust_status}",
+            f"Chemical mixture: ({','.join(map(str, mixture))}), "
+            f"chemical amount: {chemical_amount}/{max_chemical_n}",
+            f"Reaction signal: {reaction_signal}",
+        ))
         template_args = {
             "max_chemical_n": max_chemical_n,
-            "chemical_state": format_current_chemicals(infos[i].get("chemical_dict"), max_chemical_n),
-            "key_state": format_key_status(infos[i].get("key_rust_status")),
-            "reaction_signal": str(
-                infos[i].get("current_reaction_signal") or "not tested"
-            ).strip().lower(),
             "state_obs": state_obs,
-            "step_info": f"Step: {len(records)} / {config.env.max_steps}",
-            "chemical_belief": build_chemical_belief(records, infos[i]),
+            "chemical_belief": build_chemical_belief(records, info),
         }
         valid_skill_names = get_valid_discoveryworld_skills(
-            infos[i], max_chemical_n=max_chemical_n
+            info, max_chemical_n=max_chemical_n
         )
-        infos[i]["valid_skills"] = list(valid_skill_names)
+        info["valid_skills"] = list(valid_skill_names)
         template_args["valid_skills"] = "\n".join(valid_skill_names)
-        in_chemical_stage = bool(infos[i].get("is_key_in_jar"))
+        in_chemical_stage = bool(info.get("is_key_in_jar"))
         if init or in_chemical_stage or config.env.history_length <= 0 or not records:
             obs = DISCOVERYWORLD_TEMPLATE_NO_HIS.format(**template_args)
         else:

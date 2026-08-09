@@ -94,27 +94,7 @@ def build_ordered_seed_pools_by_amount(
 	min_chemicals: int = 1,
 	train_fraction: float = 0.8,
 ) -> Dict[int, Dict[str, List[int]]]:
-	"""Stratify target seeds by target arity, then split without overlap.
-
-	Canonical target order groups all one-, two-, and three-chemical targets
-	together. A contiguous split therefore puts structurally harder targets only
-	in validation. We split each arity independently, then round-robin the
-	strata so even a small environment batch sees structurally diverse targets.
-	"""
-	def interleave(strata: Dict[int, List[int]]) -> List[int]:
-		ordered: List[int] = []
-		depth = 0
-		while True:
-			added = False
-			for arity in sorted(strata):
-				values = strata[arity]
-				if depth < len(values):
-					ordered.append(values[depth])
-					added = True
-			if not added:
-				return ordered
-			depth += 1
-
+	"""Build an independent, contiguous train/val seed pool for each exact amount."""
 	max_amount = max(1, int(max_amount))
 	train_fraction = min(max(float(train_fraction), 0.0), 1.0)
 	pools: Dict[int, Dict[str, List[int]]] = {}
@@ -128,25 +108,15 @@ def build_ordered_seed_pools_by_amount(
 		if not all_combinations:
 			raise ValueError("No valid chemical combinations available for seed assignment")
 
-		seeds_by_arity: Dict[int, List[int]] = defaultdict(list)
-		for seed, combination in enumerate(all_combinations):
-			arity = sum(1 for value in combination.values() if int(value) > 0)
-			seeds_by_arity[arity].append(seed)
-
-		train_by_arity: Dict[int, List[int]] = {}
-		val_by_arity: Dict[int, List[int]] = {}
-		for arity, seeds in seeds_by_arity.items():
-			if len(seeds) == 1:
-				train_by_arity[arity] = list(seeds)
-				val_by_arity[arity] = list(seeds)
-				continue
+		seeds = list(range(len(all_combinations)))
+		if len(seeds) == 1:
+			train_pool = list(seeds)
+			val_pool = list(seeds)
+		else:
 			train_size = int(round(len(seeds) * train_fraction))
 			train_size = max(1, min(len(seeds) - 1, train_size))
-			train_by_arity[arity] = seeds[:train_size]
-			val_by_arity[arity] = seeds[train_size:]
-
-		train_pool = interleave(train_by_arity)
-		val_pool = interleave(val_by_arity)
+			train_pool = seeds[:train_size]
+			val_pool = seeds[train_size:]
 
 		pools[amount] = {
 			"train": train_pool,

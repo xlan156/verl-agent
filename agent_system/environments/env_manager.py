@@ -700,6 +700,7 @@ class DiscoveryWorldEnvironmentManager(EnvironmentManagerBase):
             if total_batch_list[batch_idx][i]["active_masks"]:
                 info = total_infos[batch_idx][i]
                 success["success_rate"].append(float(info["won"]))
+                success["task_score"].append(float(info.get("score_normalized", 0.0)))
                 success["eval_seed"].append(int(info["seed"]))
                 return
 

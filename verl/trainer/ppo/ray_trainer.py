@@ -694,6 +694,7 @@ class RayPPOTrainer:
         traj_uid_list = []
         success_rate_dict = {}
         success_by_seed_dict = defaultdict(list)
+        episode_results = []
 
         # Lists to collect samples for the table
         sample_inputs = []
@@ -775,13 +776,44 @@ class RayPPOTrainer:
             data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
             tool_calling_list.append(test_output_gen_batch.non_tensor_batch['tool_callings'])
             traj_uid_list.append(test_output_gen_batch.non_tensor_batch['traj_uid'])
-            # success rate
-            if "episode_success" in test_batch.non_tensor_batch and "eval_seed" in test_batch.non_tensor_batch:
-                _, episode_indices = np.unique(test_batch.non_tensor_batch["traj_uid"], return_index=True)
-                for episode_idx in episode_indices:
+            # Preserve one detailed record per trajectory for offline evaluation.
+            required_episode_keys = {
+                "episode_success",
+                "episode_task_score",
+                "episode_lengths",
+                "episode_rewards",
+                "eval_seed",
+                "is_action_valid",
+            }
+            if required_episode_keys.issubset(test_batch.non_tensor_batch):
+                trajectory_ids = np.asarray(test_batch.non_tensor_batch["traj_uid"])
+                _, first_indices = np.unique(trajectory_ids, return_index=True)
+                for episode_idx in sorted(int(index) for index in first_indices):
+                    trajectory_mask = trajectory_ids == trajectory_ids[episode_idx]
+                    valid_actions = np.asarray(
+                        test_batch.non_tensor_batch["is_action_valid"]
+                    )[trajectory_mask].astype(np.float32)
+                    success_value = float(
+                        test_batch.non_tensor_batch["episode_success"][episode_idx]
+                    )
                     seed = int(test_batch.non_tensor_batch["eval_seed"][episode_idx])
-                    success_by_seed_dict[seed].append(
-                        float(test_batch.non_tensor_batch["episode_success"][episode_idx])
+                    success_by_seed_dict[seed].append(success_value)
+                    episode_results.append(
+                        {
+                            "seed": seed,
+                            "steps": int(
+                                test_batch.non_tensor_batch["episode_lengths"][episode_idx]
+                            ),
+                            "task_score": float(
+                                test_batch.non_tensor_batch["episode_task_score"][episode_idx]
+                            ),
+                            "success": success_value,
+                            "total_reward": float(
+                                test_batch.non_tensor_batch["episode_rewards"][episode_idx]
+                            ),
+                            "valid_actions": int(valid_actions.sum()),
+                            "valid_ratio": float(valid_actions.mean()) if len(valid_actions) else 0.0,
+                        }
                     )
             for k in test_batch.non_tensor_batch.keys():
                 if 'success_rate' in k:
@@ -835,6 +867,20 @@ class RayPPOTrainer:
 
         for seed, values in sorted(success_by_seed_dict.items()):
             metric_dict[f"val/success_rate_by_seed/{seed}"] = float(np.mean(values))
+
+        if episode_results:
+            episode_metric_values = {
+                "success_rate": [item["success"] for item in episode_results],
+                "task_score": [item["task_score"] for item in episode_results],
+                "episode_length": [item["steps"] for item in episode_results],
+                "valid_ratio": [item["valid_ratio"] for item in episode_results],
+            }
+            for metric_name, values in episode_metric_values.items():
+                metric_dict[f"val/metrics/{metric_name}/mean"] = float(np.mean(values))
+                metric_dict[f"val/metrics/{metric_name}/std"] = float(np.std(values))
+            for episode_index, item in enumerate(episode_results):
+                for field, value in item.items():
+                    metric_dict[f"val/episode/{episode_index}/{field}"] = float(value)
 
         return metric_dict
 
@@ -967,7 +1013,7 @@ class RayPPOTrainer:
             with open(local_latest_checkpointed_iteration, "w") as f:
                 f.write(str(self.global_steps))
 
-    def _maybe_save_best_val_success(self, val_metrics):
+    def _maybe_save_best_val_success(self, val_metrics, checkpoint_source=None):
         """Overwrite one checkpoint when the configured validation success metric improves."""
         if not self.config.trainer.get("save_best_val_success", False):
             return False
@@ -990,7 +1036,15 @@ class RayPPOTrainer:
         # The fixed directory name prevents best checkpoints from accumulating.
         if os.path.exists(checkpoint_path):
             shutil.rmtree(checkpoint_path)
-        self._save_checkpoint(checkpoint_name=checkpoint_name, update_latest=False)
+        if checkpoint_source is None:
+            self._save_checkpoint(checkpoint_name=checkpoint_name, update_latest=False)
+        else:
+            # A periodic checkpoint at this exact step contains identical model,
+            # optimizer, scheduler, and dataloader state. Reuse it instead of
+            # loading the offloaded FSDP model onto the GPU a second time. On
+            # memory-constrained MIG instances, the second save can fragment
+            # enough CUDA memory for the following vLLM wake_up() to OOM.
+            shutil.copytree(checkpoint_source, checkpoint_path)
         self.best_val_success = current
         metadata_path = os.path.join(checkpoint_path, "best_val_success.json")
         with open(metadata_path, "w") as f:
@@ -1491,18 +1545,32 @@ class RayPPOTrainer:
                                 dump_path=rollout_data_dir,
                             )
 
+                    checkpoint_due = self.config.trainer.save_freq > 0 and (
+                        is_last_step or self.global_steps % self.config.trainer.save_freq == 0
+                    )
+                    val_metrics = None
+
                     # validate
                     if self.val_reward_fn is not None and self.config.trainer.test_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0):
                         with _timer("testing", timing_raw):
                             val_metrics: dict = self._validate()
-                            self._maybe_save_best_val_success(val_metrics)
+                            if not checkpoint_due:
+                                self._maybe_save_best_val_success(val_metrics)
                             if is_last_step:
                                 last_val_metrics = val_metrics
                         metrics.update(val_metrics)
 
-                    if self.config.trainer.save_freq > 0 and (is_last_step or self.global_steps % self.config.trainer.save_freq == 0):
+                    if checkpoint_due:
                         with _timer("save_checkpoint", timing_raw):
                             self._save_checkpoint()
+                            if val_metrics is not None:
+                                checkpoint_source = os.path.join(
+                                    self.config.trainer.default_local_dir,
+                                    f"global_step_{self.global_steps}",
+                                )
+                                self._maybe_save_best_val_success(
+                                    val_metrics, checkpoint_source=checkpoint_source
+                                )
 
                 # training metrics
                 metrics.update(

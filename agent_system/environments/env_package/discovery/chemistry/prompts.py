@@ -1,20 +1,3 @@
-def format_current_chemicals(chemical_dict, max_chemical_n):
-    chemical_dict = chemical_dict or {}
-    chemicals = ["A", "B", "C", "D"]
-    counts = {chemical: int(chemical_dict.get(chemical, 0) or 0) for chemical in chemicals}
-    total = sum(counts.values())
-    current_chemicals = ", ".join(f"{chemical}={counts[chemical]}" for chemical in chemicals)
-    return (
-        f"Chemical amount in jar / Required chemical amount: {total} / {max_chemical_n}\n"
-        f"Current chemicals: {current_chemicals}"
-    )
-
-
-def format_key_status(key_rust_status):
-    rust_status = str(key_rust_status or "unknown").strip().lower()
-    return f"Rust level: {rust_status}\nReady to open: {rust_status == 'no rust'}"
-
-
 def format_empty_chemical_belief():
     return "No chemical experiment has been observed yet."
 
@@ -28,9 +11,6 @@ Use the dispenser to add chemicals to the jar, and remove chemicals if necessary
 When key is no rust, you can choose to open the door.
 
 [STATE]
-{step_info}
-{chemical_state}
-{key_state}
 {state_obs}
 
 [CHEMICAL MEMORY]
@@ -59,9 +39,6 @@ Use the dispenser to add chemicals to the jar, and remove chemicals if necessary
 When key is no rust, you can choose to open the door.
 
 [STATE]
-{step_info}
-{chemical_state}
-{key_state}
 {state_obs}
 
 [RECENT ACTIONS]

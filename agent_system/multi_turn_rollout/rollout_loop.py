@@ -287,6 +287,8 @@ class TrajectoryCollector:
                         # Binary outcome for this trajectory. Keep "success_rate"
                         # reserved for aggregate metrics consumed by metric_utils.
                         data["episode_success"] = success["success_rate"][bs]
+                    if "task_score" in success:
+                        data["episode_task_score"] = success["task_score"][bs]
                     if "eval_seed" in success:
                         data["eval_seed"] = success["eval_seed"][bs]
 
