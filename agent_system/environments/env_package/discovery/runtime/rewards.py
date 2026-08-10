@@ -50,16 +50,6 @@ class DiscoveryWorldRewardMixin:
         teacher_skill = self.teacher.select_skill(self._last_info or info)
         self._last_teacher_skill = teacher_skill
 
-        if not teacher_skill:
-            ui = (info.get("raw_observation") or {}).get("ui", {})
-            logger.debug(
-                "Teacher could not select a skill. is_key_in_jar=%s used_dispensers=%s observation=%s",
-                info.get("is_key_in_jar", False),
-                info.get("used_dispensers", {}),
-                compress_ui_observation(ui),
-            )
-            return 0.0
-
         if skill_name == teacher_skill:
             return 1.0
         return 0.0

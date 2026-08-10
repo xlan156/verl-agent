@@ -28,7 +28,7 @@ class PlantRuleBasedTeacher:
         active = info.get("plant_active_field")
         candidates = self.candidates(info)
         if active is not None:
-            if not candidates:
+            if len(candidates) != 1:
                 return "cancel_field_configuration"
             nutrient, value = candidates[0]
             selections = info.get("plant_field_selections", {}).get(str(active), {})
@@ -38,9 +38,15 @@ class PlantRuleBasedTeacher:
             return "commit_field_configuration"
         if len(candidates) != 1 and info.get("plant_unmeasured_plots", 0) > 0:
             return "measure_next_pilot_plot"
+        if len(candidates) != 1:
+            return None
         committed = {int(value) for value in info.get("plant_committed_fields", [])}
         if 1 not in committed:
             return "open_field_1_controller"
+        nutrient, value = candidates[0]
+        selections = info.get("plant_field_selections", {}).get("1", {})
+        if int(selections.get(nutrient, 0) or 0) != value:
+            return None
         planted = info.get("plant_planted_counts", {}).get("1", 0)
         if planted < 2:
             return "plant_seed_in_field_1"
