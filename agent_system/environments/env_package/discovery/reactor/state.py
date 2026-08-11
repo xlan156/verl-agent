@@ -9,17 +9,21 @@ from .prompts import REACTOR_TEMPLATE, REACTOR_TEMPLATE_NO_HIS
 def prompt_state(info: dict[str, Any]) -> dict[str, Any]:
     model = info.get("reactor_inferred_model")
     compact_memory = {}
+    
     for crystal, record in info.get("reactor_experiment_memory", {}).items():
         known_frequency = record.get("known_frequency")
         crystal_frequency = known_frequency
+        
         if crystal_frequency is None and model:
             reading = float(record.get("readings", {}).get(model["dimension"]))
             crystal_frequency = int(round(model["slope"] * reading + model["offset"], 2))
+            
         compact_memory[crystal] = {
             "readings": record.get("readings", {}),
             "known_frequency": known_frequency,
             "crystal_frequency": crystal_frequency,
         }
+        
     return {
         "instruments": info.get("reactor_instruments", []),
         "crystal_and_instrument_memory": compact_memory,

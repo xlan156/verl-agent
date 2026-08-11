@@ -97,13 +97,18 @@ def discoveryworld_projection(
     infos = list(infos or [])
     if len(infos) < len(actions):
         infos.extend([None] * (len(actions) - len(infos)))
+        
     for response, info in zip(actions, infos):
         skill = _extract_skill(response)
+        
         if skill is not None and info is not None:
             prompt_valid_skills = (info or {}).get("valid_skills")
             valid_skills = set(prompt_valid_skills or [])
+            
             if skill not in valid_skills:
                 skill = None
+                
         processed.append(skill)
         valids.append(int(skill is not None))
+        
     return processed, valids

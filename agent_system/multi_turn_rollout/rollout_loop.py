@@ -421,24 +421,6 @@ class TrajectoryCollector:
                         "environment_seed": int(info_i.get("seed", -1)),
                         "reward": float(_rewards[i]) if i < len(_rewards) else None,
                         "task_reward": float(info_i.get("task_reward", _rewards[i])),
-                        "teacher_reward": float(
-                            reward_components.get("teacher", 0.0)
-                        ),
-                        "game_progress_reward": float(
-                            reward_components.get("game_progress", 0.0)
-                        ),
-                        "target_distance_reward": float(
-                            reward_components.get("target_distance", 0.0)
-                        ),
-                        "repetition_penalty": float(
-                            reward_components.get("repetition", 0.0)
-                        ),
-                        "action_status_penalty": float(
-                            reward_components.get("action_status", 0.0)
-                        ),
-                        "completion_reward": float(
-                            reward_components.get("completion", 0.0)
-                        ),
                         "done": bool(_dones[i]) if i < len(_dones) else False,
                         "prompt": _truncate(prompt_text if prompt_text is None else str(prompt_text)),
                         "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
@@ -446,12 +428,6 @@ class TrajectoryCollector:
                         "is_action_valid": bool(info_i.get("is_action_valid", True)),
                         "teacher_skill": str(info_i.get("teacher_skill", "")),
                         "action_status": str(info_i.get("action_status", "")),
-                        "task_family": str(info_i.get("task_family", "")),
-                        "task_state": _truncate(json.dumps(
-                            info_i.get("llm_step_state", {}), sort_keys=True, default=str
-                        )),
-                        "response_format_score": float(info_i.get("response_format_score", 0.0)),
-                        "post_won": bool(info_i.get("won", False)),
                     }
                     llm_step_rows.append(row)
 

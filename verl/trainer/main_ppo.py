@@ -50,7 +50,16 @@ def run_ppo(config) -> None:
     #runner = TaskRunner.remote()
     #ray.get(runner.run.remote(config))
     runner = TaskRunner()
-    return runner.run(config)
+    try:
+        return runner.run(config)
+    finally:
+        # Disconnect deterministically. Batch launchers may own a separate
+        # ``ray start --block`` process, stopped by their shell EXIT trap after
+        # this Python driver returns.
+        if ray.is_initialized():
+            print("[shutdown] Disconnecting Ray driver...", flush=True)
+            ray.shutdown()
+            print("[shutdown] Ray driver disconnected.", flush=True)
 
 
 #@ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
@@ -190,10 +199,26 @@ class TaskRunner:
             envs=envs,
             val_envs=val_envs,
         )
-        print("[startup] Initializing model workers...", flush=True)
-        trainer.init_workers()
-        print("[startup] Model workers initialized; entering trainer.fit().", flush=True)
-        return trainer.fit()
+        try:
+            print("[startup] Initializing model workers...", flush=True)
+            trainer.init_workers()
+            print("[startup] Model workers initialized; entering trainer.fit().", flush=True)
+            return trainer.fit()
+        finally:
+            # These managers own independent Ray actors. Leaving them to GC can
+            # keep the driver alive after the final training step.
+            for name, manager in (("validation", val_envs), ("training", envs)):
+                try:
+                    print(f"[shutdown] Closing {name} environments...", flush=True)
+                    manager.close()
+                    print(f"[shutdown] Closed {name} environments.", flush=True)
+                except Exception as exc:
+                    # Continue to ray.shutdown(), the final cleanup boundary
+                    # for model workers and any failed environment actors.
+                    print(
+                        f"[shutdown] Failed to close {name} environments: {exc!r}",
+                        flush=True,
+                    )
 
 
 def create_rl_dataset(data_paths, data_config, tokenizer, processor):

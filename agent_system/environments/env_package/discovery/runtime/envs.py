@@ -583,15 +583,20 @@ class DiscoveryWorldVectorEnv:
         if not getattr(self, "_workers", None):
             return
 
-        # Gracefully close all remote workers
-        close_futures = []
-        for worker in self._workers:
-            close_futures.append(worker.close.remote())
-        ray.get(close_futures)
-
-        # Then kill the actors
-        for worker in self._workers:
-            ray.kill(worker)
+        workers = list(self._workers)
+        self._workers.clear()
+        try:
+            # A broken simulator actor must not block job teardown forever.
+            close_futures = [worker.close.remote() for worker in workers]
+            ray.get(close_futures, timeout=30)
+        except Exception as exc:
+            logger.warning("DiscoveryWorld worker graceful close failed: %r", exc)
+        finally:
+            for worker in workers:
+                try:
+                    ray.kill(worker, no_restart=True)
+                except Exception as exc:
+                    logger.warning("Failed to kill DiscoveryWorld worker: %r", exc)
 
     @staticmethod
     def _append_result(
@@ -606,6 +611,7 @@ class DiscoveryWorldVectorEnv:
         info_list.append(normalized)
 
 
+# Deprecated
 def _select_discoveryworld_env_cls(env_variant: Optional[str]):
     variant = str(env_variant or "original").strip().lower()
     if variant in {"", "original", "default", "full"}:
