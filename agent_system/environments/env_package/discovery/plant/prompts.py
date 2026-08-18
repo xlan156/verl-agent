@@ -2,6 +2,9 @@ PLANT_TEMPLATE_NO_HIS = """
 [TASK]
 Discover the nutrient rule for Plant Nutrients (Normal) through observable plot experiments. Nutrient levels use 1=low, 2=medium, and 3=high. Once exactly one rule candidate remains, configure field 1 to that nutrient and level, commit it, plant two seeds in field 1, then wait for growth. Do not assume hidden simulator state.
 
+[DECISION RULE]
+VALID SKILLS are executable options, not a recommendation. Compare the sole observable rule candidate with the current field selection: choose the matching nutrient level if it is not set, and choose commit only when it already matches. After commit, plant until field 1 contains two seeds; waiting before that is unproductive.
+
 [STATE]
 {step_info}
 {state}
@@ -23,6 +26,9 @@ one valid skill name
 PLANT_TEMPLATE = """
 [TASK]
 Discover the nutrient rule for Plant Nutrients (Normal) through observable plot experiments. Nutrient levels use 1=low, 2=medium, and 3=high. Once exactly one rule candidate remains, configure field 1 to that nutrient and level, commit it, plant two seeds in field 1, then wait for growth. Do not assume hidden simulator state.
+
+[DECISION RULE]
+VALID SKILLS are executable options, not a recommendation. Compare the sole observable rule candidate with the current field selection: choose the matching nutrient level if it is not set, and choose commit only when it already matches. After commit, plant until field 1 contains two seeds; waiting before that is unproductive.
 
 [STATE]
 {step_info}

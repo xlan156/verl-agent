@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from .rewards import state_signature, target_progress_reward
-from .skills import STATIC_SKILLS, PlantNormalSkill
+from .skills import LEVELS, STATIC_SKILLS, PlantNormalSkill
 from .teacher import PlantRuleBasedTeacher
 
 
@@ -70,46 +70,58 @@ class TaskAdapter:
 
     @staticmethod
     def valid_skills(info: dict[str, Any], env: Any) -> list[str]:
-        active = info.get("plant_active_field")
-        if active is not None:
-            return [
-                skill for skill in STATIC_SKILLS
-                if skill.startswith("set_") or skill in {
-                    "commit_field_configuration", "cancel_field_configuration"
-                }
-            ]
+        """Expose only actions that advance the observable Plant phase."""
+        if bool(info.get("won", False)):
+            return []
 
-        valid = []
         tools = set(info.get("plant_tools", []))
         tools_ready = {
             "soil nutrient meter", "shovel", "seed jar"
         }.issubset(tools)
         if not tools_ready:
-            valid.append("collect_plant_tools")
+            return ["collect_plant_tools"]
 
         candidates = info.get("plant_rule_candidates", [])
         unmeasured = int(info.get("plant_unmeasured_plots", 0) or 0)
-        if tools_ready and len(candidates) != 1 and unmeasured > 0:
-            valid.append("measure_next_pilot_plot")
+        active = info.get("plant_active_field")
+        if active is not None:
+            # This uses only the sole candidate inferred from observable
+            # experiments; no simulator-hidden nutrient target is accessed.
+            if len(candidates) != 1 or int(active) != 1:
+                return ["cancel_field_configuration"]
+            candidate = candidates[0]
+            nutrient = str(candidate["nutrient"])
+            # Keep a genuine policy decision: the candidate identifies the
+            # relevant nutrient, while the model must read its level and the
+            # current selection to choose a setter or commit. These are all
+            # executable in the currently open controller.
+            return [
+                *(f"set_{nutrient}_{level_name}" for level_name in LEVELS),
+                "commit_field_configuration",
+                "cancel_field_configuration",
+            ]
+
+        if len(candidates) != 1:
+            return ["measure_next_pilot_plot"] if unmeasured > 0 else []
 
         committed = {int(field) for field in info.get("plant_committed_fields", [])}
         planted = {
             int(field): int(count)
             for field, count in info.get("plant_planted_counts", {}).items()
         }
-        for field in (1, 2, 3):
-            if field not in committed:
-                valid.append(f"open_field_{field}_controller")
-            elif planted.get(field, 0) < 2:
-                valid.append(f"plant_seed_in_field_{field}")
-
-        if any(count >= 2 for count in planted.values()):
-            valid.append("wait_for_growth")
-
-        return valid
+        if 1 not in committed:
+            return ["open_field_1_controller"]
+        if planted.get(1, 0) < 2:
+            return ["plant_seed_in_field_1", "wait_for_growth"]
+        return ["wait_for_growth"]
 
     state_signature = staticmethod(state_signature)
     target_progress_reward = staticmethod(target_progress_reward)
+
+    @staticmethod
+    def terminal_reward_adjustment(env: Any, info: dict[str, Any]) -> float:
+        from .rewards import terminal_reward_adjustment
+        return terminal_reward_adjustment(env, info)
 
     @staticmethod
     def build_prompt(raw_obs, info, records, config, init=False):

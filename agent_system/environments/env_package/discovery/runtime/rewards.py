@@ -158,6 +158,17 @@ class DiscoveryWorldRewardMixin:
             task_reward = self.clip_reward(task_reward)
             reward = self.clip_reward(reward)
 
+        terminal_adjustment_fn = getattr(
+            self._task_adapter, "terminal_reward_adjustment", None
+        )
+        terminal_adjustment = (
+            float(terminal_adjustment_fn(self, info))
+            if terminal_adjustment_fn is not None
+            else 0.0
+        )
+        task_reward += terminal_adjustment
+        reward += terminal_adjustment
+
         info["teacher_skill"] = self._last_teacher_skill
         info["task_reward"] = float(task_reward)
         info["reward_components"] = {
@@ -169,6 +180,7 @@ class DiscoveryWorldRewardMixin:
             "action_status": float(action_status_penalty),
             "step_cost": float(step_cost),
             "completion": float(completion_reward),
+            "terminal_adjustment": float(terminal_adjustment),
         }
         self._prev_score = cur_score
         return reward, done

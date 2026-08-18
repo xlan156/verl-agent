@@ -1244,6 +1244,15 @@ class RayPPOTrainer:
             config=OmegaConf.to_container(self.config, resolve=True),
         )
 
+        try:
+            return self._fit(logger)
+        finally:
+            # Background loggers must stop before main_ppo tears down Ray.
+            logger.finish()
+
+    def _fit(self, logger):
+        """Run the training loop with an explicitly managed logger."""
+
         self.global_steps = 0
         self.best_val_success = float("-inf")
         self.best_train_success = float("-inf")

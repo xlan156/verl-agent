@@ -36,6 +36,7 @@ class Tracking:
     supported_backend = ["wandb", "mlflow", "swanlab", "vemlp_wandb", "tensorboard", "console", "clearml"]
 
     def __init__(self, project_name, experiment_name, default_backend: Union[str, List[str]] = "console", config=None):
+        self._finished = False
         if isinstance(default_backend, str):
             default_backend = [default_backend]
         for backend in default_backend:
@@ -129,18 +130,34 @@ class Tracking:
             if backend is None or default_backend in backend:
                 logger_instance.log(data=data, step=step)
 
-    def __del__(self):
+    def finish(self, exit_code=0):
+        """Flush and stop logging backends exactly once.
+
+        Explicit cleanup is required because wandb background resources can
+        keep a completed batch driver alive after Ray has shut down.
+        """
+        if self._finished:
+            return
+        self._finished = True
+
         if "wandb" in self.logger:
-            self.logger["wandb"].finish(exit_code=0)
+            self.logger["wandb"].finish(exit_code=exit_code)
         if "swanlab" in self.logger:
             self.logger["swanlab"].finish()
         if "vemlp_wandb" in self.logger:
-            self.logger["vemlp_wandb"].finish(exit_code=0)
+            self.logger["vemlp_wandb"].finish(exit_code=exit_code)
         if "tensorboard" in self.logger:
             self.logger["tensorboard"].finish()
 
-        if "clearnml" in self.logger:
-            self.logger["clearnml"].finish()
+        if "clearml" in self.logger:
+            self.logger["clearml"].finish()
+
+    def __del__(self):
+        # Best effort only: interpreter shutdown may have torn modules down.
+        try:
+            self.finish()
+        except Exception:
+            pass
 
 
 class ClearMLLogger:

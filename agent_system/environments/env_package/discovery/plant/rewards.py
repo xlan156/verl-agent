@@ -6,9 +6,16 @@ from typing import Any
 TOTAL_RULE_CANDIDATES = 15
 
 SUCCESS_POTENTIAL = 20.0
+CONFIGURED_POTENTIAL = 3.0
+COMMITTED_POTENTIAL = 6.0
+PLANTED_POTENTIAL = 4.0
+TERMINAL_FAILURE_PENALTY = -10.0
 WRONG_FIELD_COMMIT_PENALTY = -4.0
 WRONG_FIELD_PLANT_PENALTY = -2.0
 UNPRODUCTIVE_WAIT_PENALTY = -1.0
+WRONG_LEVEL_SETTER_PENALTY = -1.0
+MISSED_COMMIT_PENALTY = -2.0
+CANCEL_CONFIGURATION_PENALTY = -1.0
 
 
 def _canonical_selections(info: dict[str, Any]) -> tuple[Any, ...]:
@@ -81,11 +88,12 @@ def progress_potential(info: dict[str, Any] | None) -> float:
         for field, count in info.get("plant_planted_counts", {}).items()
     }
     field_one_matches = _field_matches_rule(info, "1", rule)
-    configured = 1.0 if field_one_matches else 0.0
+    configured = CONFIGURED_POTENTIAL if field_one_matches else 0.0
     correctly_committed = "1" in _correct_committed_fields(info, rule)
-    committed_correctly = 1.0 if correctly_committed else 0.0
+    committed_correctly = COMMITTED_POTENTIAL if correctly_committed else 0.0
     planted_correctly = (
-        0.5 * min(2, planted.get("1", 0)) if correctly_committed else 0.0
+        0.5 * PLANTED_POTENTIAL * min(2, planted.get("1", 0))
+        if correctly_committed else 0.0
     )
     success = SUCCESS_POTENTIAL if bool(info.get("won", False)) else 0.0
     return float(
@@ -97,6 +105,23 @@ def target_progress_reward(env: Any, info: dict[str, Any]) -> float:
     before = env._last_info or {}
     reward = progress_potential(info) - progress_potential(before)
     rule = _unique_rule(info)
+    action = env.action_history[-1] if env.action_history else None
+
+    before_rule = _unique_rule(before)
+    active_before = before.get("plant_active_field")
+    if before_rule is not None and str(active_before) == "1":
+        if _field_matches_rule(before, "1", before_rule):
+            if action != "commit_field_configuration":
+                reward += MISSED_COMMIT_PENALTY
+        else:
+            nutrient, level = before_rule
+            level_name = {1: "low", 2: "medium", 3: "high"}[level]
+            expected_setter = f"set_{nutrient}_{level_name}"
+            if isinstance(action, str) and action.startswith("set_"):
+                if action != expected_setter:
+                    reward += WRONG_LEVEL_SETTER_PENALTY
+            elif action == "cancel_field_configuration":
+                reward += CANCEL_CONFIGURATION_PENALTY
 
     for field in _newly_committed_fields(before, info):
         if field != "1" or not _field_matches_rule(info, field, rule):
@@ -119,6 +144,17 @@ def target_progress_reward(env: Any, info: dict[str, Any]) -> float:
             reward += UNPRODUCTIVE_WAIT_PENALTY
 
     return float(reward)
+
+
+def terminal_reward_adjustment(env: Any, info: dict[str, Any]) -> float:
+    """Give timed-out Plant trajectories an unclipped terminal failure signal.
+
+    Other task families do not install this hook, so their rewards are unchanged.
+    """
+    timed_out = int(getattr(env, "_steps", 0)) >= int(
+        getattr(env, "_max_steps", 0)
+    )
+    return TERMINAL_FAILURE_PENALTY if timed_out and not bool(info.get("won", False)) else 0.0
 
 
 def state_signature(info: dict[str, Any] | None) -> tuple[Any, ...]:
