@@ -410,7 +410,6 @@ class TrajectoryCollector:
 
                 for i in range(batch_size):
                     info_i: Dict[str, Any] = infos[i] if i < len(infos) else {}
-                    reward_components = info_i.get("reward_components") or {}
                     prompt_text = None
                     if obs_texts is not None and i < len(obs_texts):
                         prompt_text = obs_texts[i]
@@ -419,8 +418,7 @@ class TrajectoryCollector:
                         "rollout_step": int(_step),
                         "env_index": int(i),
                         "environment_seed": int(info_i.get("seed", -1)),
-                        "reward": float(_rewards[i]) if i < len(_rewards) else None,
-                        "task_reward": float(info_i.get("task_reward", _rewards[i])),
+                        "step_reward": float(_rewards[i]) if i < len(_rewards) else None,
                         "done": bool(_dones[i]) if i < len(_dones) else False,
                         "prompt": _truncate(prompt_text if prompt_text is None else str(prompt_text)),
                         "llm_output": _truncate(str(text_actions[i]) if i < len(text_actions) else ""),
@@ -732,14 +730,7 @@ class TrajectoryCollector:
                         "rollout_step",
                         "env_index",
                         "environment_seed",
-                        "reward",
-                        "task_reward",
-                        "teacher_reward",
-                        "game_progress_reward",
-                        "target_distance_reward",
-                        "repetition_penalty",
-                        "action_status_penalty",
-                        "completion_reward",
+                        "step_reward",
                         "done",
                         "prompt",
                         "llm_output",
@@ -747,10 +738,7 @@ class TrajectoryCollector:
                         "is_action_valid",
                         "teacher_skill",
                         "action_status",
-                        "task_family",
-                        "task_state",
                         "response_format_score",
-                        "post_won",
                     ]
                     table = wandb.Table(columns=columns)
                     for r in llm_step_rows:
@@ -759,14 +747,7 @@ class TrajectoryCollector:
                             r.get("rollout_step"),
                             r.get("env_index"),
                             r.get("environment_seed"),
-                            r.get("reward"),
-                            r.get("task_reward"),
-                            r.get("teacher_reward"),
-                            r.get("game_progress_reward"),
-                            r.get("target_distance_reward"),
-                            r.get("repetition_penalty"),
-                            r.get("action_status_penalty"),
-                            r.get("completion_reward"),
+                            r.get("step_reward"),
                             r.get("done"),
                             r.get("prompt"),
                             r.get("llm_output"),
@@ -774,10 +755,7 @@ class TrajectoryCollector:
                             r.get("is_action_valid"),
                             r.get("teacher_skill"),
                             r.get("action_status"),
-                            r.get("task_family"),
-                            r.get("task_state"),
                             r.get("response_format_score"),
-                            r.get("post_won"),
                         )
                     wandb.log({table_key: table}, step=int(wandb_step))
             except Exception:

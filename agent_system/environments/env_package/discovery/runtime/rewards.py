@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 TASK_COMPLETION_BONUS = 20.0
 
-GAME_PROGRESS_REWARD_SCALE = 25.0
+GAME_PROGRESS_REWARD_SCALE = 20.0
 
 NON_TERMINAL_STEP_COST = -0.1
 
@@ -25,7 +25,7 @@ INVALID_NO_SKILL_PENALTY = -1.0
 
 STATE_REVISIT_PENALTY = -0.5
 
-SUCCESS_REMAINING_STEP_BONUS_SCALE = 2.0
+SUCCESS_REMAINING_STEP_BONUS_SCALE = 0.0
 
 MAX_NON_TERMINAL_REWARD = 10.0
 
@@ -100,7 +100,7 @@ class DiscoveryWorldRewardMixin:
 
     def clip_reward(self, reward: float) -> float:
         """Bound anomalous rewards without truncating normalized game progress."""
-        return float(np.clip(reward, -2.0, MAX_NON_TERMINAL_REWARD))
+        return float(np.clip(reward, -5.0, MAX_NON_TERMINAL_REWARD))
 
     def _compute_step_reward(
         self,

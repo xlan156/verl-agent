@@ -92,7 +92,7 @@ def build_ordered_seed_pools_by_amount(
 	max_amount: int,
 	num_chemicals: int = 4,
 	min_chemicals: int = 1,
-	train_fraction: float = 0.8,
+	train_fraction: float = 0.6,
 ) -> Dict[int, Dict[str, List[int]]]:
 	"""Build an independent, contiguous train/val seed pool for each exact amount."""
 	max_amount = max(1, int(max_amount))

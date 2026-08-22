@@ -15,6 +15,7 @@
 The main entry point to run the PPO algorithm
 """
 
+import gc
 import logging
 import os
 import warnings
@@ -783,7 +784,13 @@ class ActorRolloutRefWorker(Worker):
                 print(f"[rank-{self.rank}]: Saved LoRA adapter to: {lora_save_path}")
 
         if self._is_offload_param:
-            offload_fsdp_model_to_cpu(self.actor_module_fsdp)
+            # Parameter offload uses non-blocking copies. Wait before releasing
+            # cached blocks so the following vLLM wake_up cannot race cleanup.
+            offload_fsdp_model_to_cpu(self.actor_module_fsdp, empty_cache=False)
+
+        get_torch_device().synchronize()
+        gc.collect()
+        get_torch_device().empty_cache()
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=False):

@@ -22,7 +22,6 @@ import json
 import os
 import shutil
 import uuid
-from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -693,7 +692,6 @@ class RayPPOTrainer:
         tool_calling_list = []
         traj_uid_list = []
         success_rate_dict = {}
-        success_by_seed_dict = defaultdict(list)
 
         # Lists to collect samples for the table
         sample_inputs = []
@@ -776,13 +774,6 @@ class RayPPOTrainer:
             tool_calling_list.append(test_output_gen_batch.non_tensor_batch['tool_callings'])
             traj_uid_list.append(test_output_gen_batch.non_tensor_batch['traj_uid'])
             # success rate
-            if "episode_success" in test_batch.non_tensor_batch and "eval_seed" in test_batch.non_tensor_batch:
-                _, episode_indices = np.unique(test_batch.non_tensor_batch["traj_uid"], return_index=True)
-                for episode_idx in episode_indices:
-                    seed = int(test_batch.non_tensor_batch["eval_seed"][episode_idx])
-                    success_by_seed_dict[seed].append(
-                        float(test_batch.non_tensor_batch["episode_success"][episode_idx])
-                    )
             for k in test_batch.non_tensor_batch.keys():
                 if 'success_rate' in k:
                     if k not in success_rate_dict:
@@ -833,8 +824,6 @@ class RayPPOTrainer:
         for k, v in success_rate.items():
             metric_dict[f'val/{k}'] = v
 
-        for seed, values in sorted(success_by_seed_dict.items()):
-            metric_dict[f"val/success_rate_by_seed/{seed}"] = float(np.mean(values))
 
         return metric_dict
 

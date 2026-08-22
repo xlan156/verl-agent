@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import os
 import warnings
 from typing import Optional, Union
@@ -23,7 +24,7 @@ from torch.distributed.fsdp import FullStateDictConfig, ShardedOptimStateDictCon
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedTokenizer, ProcessorMixin
 
-from verl.utils.device import is_cuda_available
+from verl.utils.device import get_torch_device, is_cuda_available
 from verl.utils.fs import copy_to_local, is_non_local
 from verl.utils.fsdp_utils import fsdp_version, get_fsdp_state_ctx
 
@@ -196,6 +197,17 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 torch.save(model_state_dict, model_path)
                 torch.save(optimizer_state_dict, optim_path)  # TODO: address optimizer is None
                 torch.save(extra_state_dict, extra_path)
+        # Python blocks do not introduce a scope, so these state dicts would
+        # otherwise stay alive until the end of this method. In particular,
+        # single-rank FSDP falls back to NO_SHARD and can materialize a full
+        # model/optimizer state while vLLM is sleeping on the same GPU.
+        del model_state_dict
+        del optimizer_state_dict
+        del lr_scheduler_state_dict
+        del extra_state_dict
+        gc.collect()
+        if is_cuda_available:
+            get_torch_device().empty_cache()
 
         if self.rank == 0:
             if fsdp_version(self.model) == 1:
