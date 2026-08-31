@@ -142,6 +142,12 @@ xlan-scripts/
 qwen_hf_model/
 grpo_trained_model/
 Qw0.5merged/
-xlan/
+# Keep personal xlan artifacts ignored, but track the maintained job entrypoints.
+xlan/*
+!xlan/gigpo_base.sh
+!xlan/gigpo_dynamic.sh
+!xlan/graphpo.sh
+!xlan/graphpo_base.sh
+!xlan/eval_model.sh
 xlan/curriculum_pool_summary.csv
 xlan/VENV安装.txt
