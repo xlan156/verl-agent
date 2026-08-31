@@ -416,6 +416,8 @@ class TrajectoryCollector:
 
                     row = {
                         "rollout_step": int(_step),
+                        "trajectory_id": str(traj_uid[i]),
+                        "active": bool(active_masks[i]),
                         "env_index": int(i),
                         "environment_seed": int(info_i.get("seed", -1)),
                         "step_reward": float(_rewards[i]) if i < len(_rewards) else None,
@@ -553,11 +555,6 @@ class TrajectoryCollector:
         variance_epsilon = float(
             self.config.algorithm.filter_groups.get("reward_variance_epsilon", 0.0)
         )
-        sampler_state_fn = getattr(envs, "dynamic_sampler_state_dict", None)
-        adaptive_sampler_enabled = (
-            callable(sampler_state_fn) and sampler_state_fn() is not None
-        )
-
         while len(total_batch_list) < target_trajectories and try_count < max_try_count:
 
             if len(total_batch_list) > 0:
@@ -601,10 +598,7 @@ class TrajectoryCollector:
                                                                                                 tool_callings=tool_callings, 
                                                                                                 config=self.config,
                                                                                                 filter_rewards=episode_task_rewards,
-                                                                                                last_try=(
-                                                                                                    try_count == max_try_count
-                                                                                                    and not adaptive_sampler_enabled
-                                                                                                ),
+                                                                                                last_try=(try_count == max_try_count),
                                                                                                 )
 
             remaining = target_trajectories - len(total_batch_list)
@@ -728,6 +722,8 @@ class TrajectoryCollector:
                     columns = [
                         "global_step",
                         "rollout_step",
+                        "trajectory_id",
+                        "active",
                         "env_index",
                         "environment_seed",
                         "step_reward",
@@ -745,6 +741,8 @@ class TrajectoryCollector:
                         table.add_data(
                             int(wandb_step),
                             r.get("rollout_step"),
+                            r.get("trajectory_id"),
+                            r.get("active"),
                             r.get("env_index"),
                             r.get("environment_seed"),
                             r.get("step_reward"),
@@ -761,6 +759,9 @@ class TrajectoryCollector:
             except Exception:
                 # Best-effort logging: never break training/eval if wandb logging fails.
                 pass
+
+        if llm_step_rows is not None:
+            gen_batch_output.meta_info["llm_step_rows"] = llm_step_rows
 
         if is_train:
             sampler_metrics_fn = getattr(envs, "dynamic_sampler_metrics", None)

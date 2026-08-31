@@ -1,9 +1,9 @@
 """Adaptive seed sampling for DiscoveryWorld rollouts.
 
-The sampler combines uniform replay with a difficulty/informativeness priority.
-It deliberately lives on the driver (inside the vector environment), rather
-than in individual Ray workers, so all seed outcomes contribute to one shared
-curriculum.
+The sampler prioritizes seeds with a Bayesian estimate of whether they will
+produce DAPO-useful rollout groups. It deliberately lives on the driver
+(inside the vector environment), rather than in individual Ray workers, so all
+seed outcomes contribute to one shared curriculum.
 """
 
 from __future__ import annotations
@@ -24,16 +24,23 @@ class SeedStats:
     success_ema: float = 0.0
     # Optimized return, including teacher shaping. Kept for diagnostics only.
     reward_std_ema: float = 0.0
-    # Teacher-free task return. This is the reward signal used for priority.
+    # Teacher-free task return variation. Kept for diagnostics only.
     task_reward_std_ema: float = 0.0
     learning_progress_ema: float = 0.0
     last_sampled_step: int = -1
 
 
 class DynamicSeedSampler:
-    """Sample hard-but-informative seeds while retaining uniform replay."""
+    """Sample seeds by their posterior probability of producing useful groups.
 
-    STATE_VERSION = 3
+    A useful group is exactly the event consumed by DAPO filtering: the seed's
+    rollout group survives the non-zero task-return variance filter.  Each seed
+    keeps a Beta posterior over that Bernoulli event with Jeffreys prior
+    ``Beta(0.5, 0.5)``; sampling probabilities are normalized posterior means.
+    """
+
+    STATE_VERSION = 4
+    JEFFREYS_PRIOR = 0.5
 
     def __init__(
         self,
@@ -46,12 +53,7 @@ class DynamicSeedSampler:
         if not self.seeds:
             raise ValueError("DynamicSeedSampler requires at least one seed")
 
-        self.uniform_ratio = float(cfg.get("uniform_ratio", 0.15))
         self.ema_alpha = float(cfg.get("ema_alpha", 0.2))
-        self.hardness_alpha = float(cfg.get("hardness_alpha", 2.0))
-        self.min_attempts_per_seed = int(cfg.get("min_attempts_per_seed", 2))
-        self.max_probability_per_seed = float(cfg.get("max_probability_per_seed", 0.2))
-        self.min_informativeness = float(cfg.get("min_informativeness", 0.2))
         replacement_value = cfg.get("sample_with_replacement", True)
         if isinstance(replacement_value, str):
             replacement_value = replacement_value.strip().lower() in {
@@ -61,24 +63,9 @@ class DynamicSeedSampler:
                 "on",
             }
         self.sample_with_replacement = bool(replacement_value)
-        # DiscoveryWorld scales its monotonic normalized score by 25. A scale
-        # of 5 keeps ordinary ~0.08 progress steps distinguishable instead of
-        # saturating the informativeness term immediately, while terminal
-        # success gaps still saturate as intended.
-        self.reward_std_scale = float(cfg.get("reward_std_scale", 5.0))
-        self.progress_weight = float(cfg.get("progress_weight", 0.25))
 
-        if not 0.0 <= self.uniform_ratio <= 1.0:
-            raise ValueError("uniform_ratio must be in [0, 1]")
         if not 0.0 < self.ema_alpha <= 1.0:
             raise ValueError("ema_alpha must be in (0, 1]")
-        if self.min_attempts_per_seed < 0:
-            raise ValueError("min_attempts_per_seed must be non-negative")
-        if self.reward_std_scale <= 0:
-            raise ValueError("reward_std_scale must be positive")
-
-        minimum_cap = 1.0 / len(self.seeds)
-        self.max_probability_per_seed = max(self.max_probability_per_seed, minimum_cap)
         self.stats: Dict[int, SeedStats] = {seed: SeedStats() for seed in self.seeds}
         self.total_groups = 0
         self.total_trajectories = 0
@@ -95,117 +82,41 @@ class DynamicSeedSampler:
             return float(value)
         return float((1.0 - alpha) * previous + alpha * value)
 
-    @staticmethod
-    def _cap_probabilities(probabilities: np.ndarray, cap: float) -> np.ndarray:
-        """Project probabilities onto the simplex with an upper bound."""
-        probabilities = np.asarray(probabilities, dtype=np.float64)
-        probabilities = probabilities / probabilities.sum()
-        if cap >= 1.0 or probabilities.max() <= cap:
-            return probabilities
-
-        result = np.zeros_like(probabilities)
-        remaining = np.ones(len(probabilities), dtype=bool)
-        remaining_mass = 1.0
-        while remaining.any():
-            scaled = probabilities[remaining]
-            scaled = scaled / scaled.sum() * remaining_mass
-            over = scaled > cap
-            if not over.any():
-                result[remaining] = scaled
-                break
-            remaining_indices = np.flatnonzero(remaining)
-            capped_indices = remaining_indices[over]
-            result[capped_indices] = cap
-            remaining[capped_indices] = False
-            remaining_mass = 1.0 - result.sum()
-        return result / result.sum()
+    def _posterior_mean(self, stat: SeedStats) -> float:
+        prior = self.JEFFREYS_PRIOR
+        return float(
+            (prior + stat.accepted_groups)
+            / (2.0 * prior + stat.accepted_groups + stat.rejected_groups)
+        )
 
     def probabilities(self) -> np.ndarray:
         """Return the current sampling distribution in seed order."""
-        uniform = np.full(len(self.seeds), 1.0 / len(self.seeds), dtype=np.float64)
-        priorities = []
-        for seed in self.seeds:
-            stat = self.stats[seed]
-            if stat.groups == 0:
-                priorities.append(1.0)
-                continue
-            success = float(np.clip(stat.success_ema, 0.0, 1.0))
-            hardness = (1.0 - success) ** self.hardness_alpha
-            success_variance = 4.0 * success * (1.0 - success)
-            reward_variance = min(
-                1.0, stat.task_reward_std_ema / self.reward_std_scale
-            )
-            informativeness = max(success_variance, reward_variance)
-            informativeness = self.min_informativeness + (
-                1.0 - self.min_informativeness
-            ) * informativeness
-            progress = min(1.0, stat.learning_progress_ema)
-            exploration = 1.0 / np.sqrt(1.0 + stat.groups)
-            priorities.append(
-                hardness * informativeness
-                + self.progress_weight * progress
-                + 0.05 * exploration
-            )
-
-        adaptive = np.asarray(priorities, dtype=np.float64)
-        if not np.isfinite(adaptive).all() or adaptive.sum() <= 0:
-            adaptive = uniform
-        else:
-            adaptive /= adaptive.sum()
-        probabilities = self.uniform_ratio * uniform + (1.0 - self.uniform_ratio) * adaptive
-        probabilities = self._cap_probabilities(
-            probabilities, self.max_probability_per_seed
+        priorities = np.asarray(
+            [self._posterior_mean(self.stats[seed]) for seed in self.seeds],
+            dtype=np.float64,
         )
+        if not np.isfinite(priorities).all() or priorities.sum() <= 0:
+            probabilities = np.full(len(self.seeds), 1.0 / len(self.seeds))
+        else:
+            probabilities = priorities / priorities.sum()
         self._last_probabilities = probabilities
         return probabilities.copy()
 
     def sample(self, num_groups: int) -> list[int]:
-        """Sample group seeds, covering under-sampled seeds before prioritization."""
+        """Sample group seeds from the posterior sampling distribution."""
         num_groups = int(num_groups)
         if num_groups <= 0:
             return []
 
-        under_sampled = [
-            seed
-            for seed in self.seeds
-            if self.stats[seed].groups < self.min_attempts_per_seed
-        ]
-        selected: list[int] = []
-        if under_sampled:
-            self._rng.shuffle(under_sampled)
-            under_sampled.sort(key=lambda seed: self.stats[seed].groups)
-            selected.extend(under_sampled[:num_groups])
-
-        remaining = num_groups - len(selected)
-        if remaining > 0:
-            probabilities = self.probabilities()
-            # Preserve deterministic coverage while any seed is still in its
-            # warmup phase. Once warmup is complete, replacement lets a single
-            # batch allocate multiple groups to hard seeds instead of merely
-            # choosing which easy seeds to omit.
-            use_adaptive_replacement = (
-                self.sample_with_replacement and not selected
-            )
-            if use_adaptive_replacement:
-                sampled = self._rng.choice(
-                    self.seeds,
-                    size=remaining,
-                    replace=True,
-                    p=probabilities,
-                )
-            else:
-                available = [seed for seed in self.seeds if seed not in selected]
-                indices = [self.seeds.index(seed) for seed in available]
-                available_p = probabilities[indices]
-                available_p /= available_p.sum()
-                replace = remaining > len(available)
-                sampled = self._rng.choice(
-                    available,
-                    size=remaining,
-                    replace=replace,
-                    p=available_p,
-                )
-            selected.extend(int(seed) for seed in np.atleast_1d(sampled))
+        probabilities = self.probabilities()
+        replace = self.sample_with_replacement or num_groups > len(self.seeds)
+        sampled = self._rng.choice(
+            self.seeds,
+            size=num_groups,
+            replace=replace,
+            p=probabilities,
+        )
+        selected = [int(seed) for seed in np.atleast_1d(sampled)]
         duplicate_count = len(selected) - len(set(selected))
         self.total_sample_batches += 1
         self.total_sampled_groups += len(selected)
@@ -314,6 +225,7 @@ class DynamicSeedSampler:
                 stat.task_reward_std_ema
             )
             metrics[f"seed_sampler/probability/{seed}"] = float(probabilities[index])
+            metrics[f"seed_sampler/posterior_mean/{seed}"] = self._posterior_mean(stat)
             metrics[f"seed_sampler/groups/{seed}"] = float(stat.groups)
             metrics[f"seed_sampler/accept_rate/{seed}"] = (
                 stat.accepted_groups / denominator if denominator else 0.0
@@ -327,15 +239,9 @@ class DynamicSeedSampler:
             "version": self.STATE_VERSION,
             "seeds": list(self.seeds),
             "config": {
-                "uniform_ratio": self.uniform_ratio,
+                "posterior_prior": "jeffreys",
                 "ema_alpha": self.ema_alpha,
-                "hardness_alpha": self.hardness_alpha,
-                "min_attempts_per_seed": self.min_attempts_per_seed,
-                "max_probability_per_seed": self.max_probability_per_seed,
                 "sample_with_replacement": self.sample_with_replacement,
-                "min_informativeness": self.min_informativeness,
-                "reward_std_scale": self.reward_std_scale,
-                "progress_weight": self.progress_weight,
             },
             "stats": {str(seed): asdict(stat) for seed, stat in self.stats.items()},
             "total_groups": self.total_groups,

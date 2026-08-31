@@ -1,17 +1,17 @@
-from agent_system.environments.env_package.discovery.dynamic_sampler import DynamicSeedSampler
 import numpy as np
 
-cap_prob = DynamicSeedSampler._cap_probabilities
-def test_cap_prob():
-    probabilities = np.array([0.1, 0.2, 0.3, 0.4])
-    upper_bound = 0.3
-    capped_probabilities = cap_prob(probabilities, upper_bound)
-    print("capped probabilities:", capped_probabilities)
+from agent_system.environments.env_package.discovery.dynamic_sampler import DynamicSeedSampler
 
 
-def test_probabilities():
-    sampler = DynamicSeedSampler(seed_pool=[1, 2, 3, 4], initial_probabilities=[0.25, 0.25, 0.25, 0.25])
-    
+def test_jeffreys_prior_is_uniform_before_observations():
+    sampler = DynamicSeedSampler([1, 2, 3, 4])
 
-test_cap_prob()
-    
+    np.testing.assert_allclose(sampler.probabilities(), [0.25, 0.25, 0.25, 0.25])
+
+
+def test_probabilities_follow_beta_posterior_means():
+    sampler = DynamicSeedSampler([1, 2])
+    sampler.observe_group(1, [0.0, 1.0], [0.0, 0.0], accepted=True)
+    sampler.observe_group(2, [0.0, 0.0], [0.0, 0.0], accepted=False)
+
+    np.testing.assert_allclose(sampler.probabilities(), [0.75, 0.25])

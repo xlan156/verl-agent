@@ -11,6 +11,7 @@ LEVELS = {"low": 1, "medium": 2, "high": 3}
 STATIC_SKILLS = (
     "collect_plant_tools",
     "measure_next_pilot_plot",
+    *(f"select_{nutrient}" for nutrient in NUTRIENTS),
     *(f"open_field_{field}_controller" for field in (1, 2, 3)),
     *(f"set_{nutrient}_{level}" for nutrient in NUTRIENTS for level in LEVELS),
     "commit_field_configuration",
@@ -20,11 +21,12 @@ STATIC_SKILLS = (
 )
 
 
-class PlantNormalSkill(ObservableSkillRunner):
+class PlantSkill(ObservableSkillRunner):
     def __init__(self, env: Any) -> None:
         super().__init__(env)
         env.plant_experiment_memory = []
         env.plant_measured_plot_uuids = set()
+        env.plant_selected_nutrient = None
         env.plant_active_field = None
         env.plant_field_selections = {1: {}, 2: {}, 3: {}}
         env.plant_committed_fields = set()
@@ -37,6 +39,10 @@ class PlantNormalSkill(ObservableSkillRunner):
             "cancel_field_configuration": self.cancel_field_configuration,
             "wait_for_growth": self.wait_for_growth,
         }
+        for nutrient in NUTRIENTS:
+            self.skill_mapping[f"select_{nutrient}"] = (
+                lambda nutrient=nutrient: self.select_nutrient(nutrient)
+            )
         for field in (1, 2, 3):
             self.skill_mapping[f"open_field_{field}_controller"] = (
                 lambda field=field: self.open_controller(field)
@@ -47,8 +53,14 @@ class PlantNormalSkill(ObservableSkillRunner):
         for nutrient in NUTRIENTS:
             for level in LEVELS:
                 self.skill_mapping[f"set_{nutrient}_{level}"] = (
-                    lambda nutrient=nutrient, level=level: self.set_nutrient(nutrient, level)
+                    lambda nutrient=nutrient, level=level: self.set_nutrient(
+                        nutrient, level
+                    )
                 )
+
+    @property
+    def difficulty(self) -> str:
+        return str(self.env._difficulty or "Normal").strip().lower()
 
     def _one(self, obj_type: str, predicate=lambda obj: True) -> Any | None:
         return next((obj for obj in self.objects(obj_type) if predicate(obj)), None)
@@ -59,10 +71,20 @@ class PlantNormalSkill(ObservableSkillRunner):
             lambda obj: int(obj.attributes.get("fieldNum", -1)) == field,
         )
 
+    def _easy_controller(self) -> Any | None:
+        return self._one(
+            "soilcontroller",
+            lambda obj: obj.attributes.get("fieldNum") is None,
+        )
+
     def _pilot_plots(self) -> list[Any]:
+        soils = self.objects("soil")
+        if self.difficulty == "easy":
+            return self.sort_objects(
+                obj for obj in soils if obj.attributes.get("testField") is not True
+            )
         return self.sort_objects(
-            obj for obj in self.objects("soil")
-            if obj.attributes.get("testField") is False
+            obj for obj in soils if obj.attributes.get("testField") is False
         )
 
     def _field_plots(self, field: int) -> list[Any]:
@@ -78,13 +100,29 @@ class PlantNormalSkill(ObservableSkillRunner):
             for obj in self.world.getAllWorldObjects()
         )
 
+    def required_tool_types(self) -> tuple[tuple[str, str], ...]:
+        if self.difficulty == "easy":
+            return (("soilnutrientmeter", "soil nutrient meter"),)
+        return (
+            ("soilnutrientmeter", "soil nutrient meter"),
+            ("shovel", "shovel"),
+            ("jar", "seed jar"),
+        )
+
     def collect_plant_tools(self) -> None:
         acquired = []
-        for obj_type in ("soilnutrientmeter", "shovel", "jar"):
-            obj = self._one(obj_type, lambda value: obj_type != "jar" or "seed" in value.name)
+        for obj_type, display_name in self.required_tool_types():
+            obj = self._one(
+                obj_type,
+                lambda value: obj_type != "jar" or "seed" in value.name,
+            )
             if obj is not None and self.pickup(obj):
-                acquired.append(obj.name)
-        self.finish(len(acquired) == 3, f"Collected plant tools: {', '.join(acquired)}")
+                acquired.append(display_name)
+        expected = len(self.required_tool_types())
+        self.finish(
+            len(acquired) == expected,
+            f"Collected plant tools: {', '.join(acquired)}",
+        )
 
     def measure_next_pilot_plot(self) -> None:
         meter = self._one("soilnutrientmeter")
@@ -92,7 +130,11 @@ class PlantNormalSkill(ObservableSkillRunner):
             self.finish(False, "Collect the soil nutrient meter first")
             return
         plot = next(
-            (obj for obj in self._pilot_plots() if obj.uuid not in self.env.plant_measured_plot_uuids),
+            (
+                obj
+                for obj in self._pilot_plots()
+                if obj.uuid not in self.env.plant_measured_plot_uuids
+            ),
             None,
         )
         if plot is None:
@@ -108,6 +150,26 @@ class PlantNormalSkill(ObservableSkillRunner):
             self.env.plant_experiment_memory.append(record)
             self.env.plant_measured_plot_uuids.add(plot.uuid)
             self.finish(True, f"Recorded observable pilot experiment: {record}")
+
+    def select_nutrient(self, nutrient: str) -> None:
+        if self.difficulty != "easy":
+            self.finish(False, "Direct nutrient selection is available on Easy only")
+            return
+        controller = self._easy_controller()
+        if controller is None:
+            self.finish(False, "Easy soil nutrient controller is unavailable")
+            return
+        success = self.talk_to(controller)
+        success = success and self.choose_dialog(nutrient.title())
+        success = success and self.choose_matching("OK")
+        if success:
+            self.env.plant_selected_nutrient = nutrient
+        self.finish(
+            success,
+            f"Selected {nutrient} as the required nutrient"
+            if success
+            else f"Failed to select {nutrient}",
+        )
 
     def open_controller(self, field: int) -> None:
         controller = self._controller(field)
@@ -155,7 +217,8 @@ class PlantNormalSkill(ObservableSkillRunner):
     def _inventory_seed(self) -> Any | None:
         return next(
             (
-                obj for obj in self.world.getAllWorldObjects()
+                obj
+                for obj in self.world.getAllWorldObjects()
                 if "seed" in str(getattr(obj, "type", "")).lower()
                 and self._inside_inventory(obj)
             ),
@@ -173,9 +236,13 @@ class PlantNormalSkill(ObservableSkillRunner):
             return
         plot = next(
             (
-                item for item in self._field_plots(field)
+                item
+                for item in self._field_plots(field)
                 if not item.attributes.get("hasHole", False)
-                and not any("seed" in str(getattr(child, "type", "")).lower() for child in item.contents)
+                and not any(
+                    "seed" in str(getattr(child, "type", "")).lower()
+                    for child in item.contents
+                )
                 and not self._plot_has_plant(item)
             ),
             None,
@@ -201,3 +268,7 @@ class PlantNormalSkill(ObservableSkillRunner):
         self.env.plant_growth_waits += 1
         self.update_ui()
         self.finish(True, "Waited five world ticks for planted seeds to grow")
+
+
+# Backward-compatible name for callers that imported the Normal-only MVP class.
+PlantNormalSkill = PlantSkill

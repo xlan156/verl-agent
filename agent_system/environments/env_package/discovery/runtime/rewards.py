@@ -107,9 +107,12 @@ class DiscoveryWorldRewardMixin:
         skill_name: Optional[str],
         info: Dict,
     ) -> Tuple[float, bool]:
+        is_plant_task = getattr(self._task_adapter, "family", None) == "plant"
         cur_score = float(info.get("score_normalized", 0.0))
         game_progress_reward = self._game_progress_reward(cur_score)
-        target_distance_reward = self._target_distance_reward(info)
+        target_distance_reward = (
+            0.0 if is_plant_task else self._target_distance_reward(info)
+        )
         teacher_reward = (
             self._teacher_skill_reward_coef
             * self._teacher_skill_reward(skill_name, self._last_info)
@@ -131,7 +134,11 @@ class DiscoveryWorldRewardMixin:
         self._last_action_status = info.get("action_status")
         action_status_penalty = self.action_status_penalty()
         task_completed = bool(self._is_task_complete(info))
-        step_cost = 0.0 if task_completed else NON_TERMINAL_STEP_COST
+        if is_plant_task:
+            repetition_penalty = 0.0
+            step_cost = 0.0
+        else:
+            step_cost = 0.0 if task_completed else NON_TERMINAL_STEP_COST
         done = task_completed or self._steps >= self._max_steps
         info["won"] = task_completed
 
@@ -155,10 +162,11 @@ class DiscoveryWorldRewardMixin:
             reward += completion_reward
         else:
             completion_reward = 0.0
-            task_reward = self.clip_reward(task_reward)
-            reward = self.clip_reward(reward)
+            if not is_plant_task:
+                task_reward = self.clip_reward(task_reward)
+                reward = self.clip_reward(reward)
 
-        terminal_adjustment_fn = getattr(
+        terminal_adjustment_fn = None if is_plant_task else getattr(
             self._task_adapter, "terminal_reward_adjustment", None
         )
         terminal_adjustment = (

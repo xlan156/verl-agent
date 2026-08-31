@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
-TOTAL_RULE_CANDIDATES = 15
+from .teacher import initial_candidates, normalize_difficulty, required_selections
 
 SUCCESS_POTENTIAL = 20.0
 CONFIGURED_POTENTIAL = 3.0
@@ -25,23 +24,25 @@ def _canonical_selections(info: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _unique_rule(info: dict[str, Any]) -> tuple[str, int] | None:
+def _unique_rule(info: dict[str, Any]) -> dict[str, Any] | None:
     candidates = info.get("plant_rule_candidates", [])
-    if len(candidates) != 1:
-        return None
-    return str(candidates[0]["nutrient"]), int(candidates[0]["level"])
+    return candidates[0] if len(candidates) == 1 else None
 
 
-def _field_matches_rule(info: dict[str, Any], field: str, rule: tuple[str, int] | None) -> bool:
-    if rule is None:
+def _field_matches_rule(
+    info: dict[str, Any], field: str, rule: dict[str, Any] | None
+) -> bool:
+    if rule is None or rule.get("rule_type") == "presence":
         return False
-    nutrient, level = rule
     selections = info.get("plant_field_selections", {}).get(str(field), {})
-    return int(selections.get(nutrient, 0) or 0) == level
+    return all(
+        int(selections.get(nutrient, 0) or 0) == level
+        for nutrient, level in required_selections(rule).items()
+    )
 
 
 def _correct_committed_fields(
-    info: dict[str, Any], rule: tuple[str, int] | None
+    info: dict[str, Any], rule: dict[str, Any] | None
 ) -> set[str]:
     committed = {str(field) for field in info.get("plant_committed_fields", [])}
     return {field for field in committed if _field_matches_rule(info, field, rule)}
@@ -78,17 +79,29 @@ def progress_potential(info: dict[str, Any] | None) -> float:
     info = info or {}
     candidates = info.get("plant_rule_candidates", [])
     candidate_count = len(candidates)
+    total_candidates = len(
+        initial_candidates(info.get("plant_difficulty", "Normal"))
+    )
     information = (
-        (TOTAL_RULE_CANDIDATES - candidate_count) / (TOTAL_RULE_CANDIDATES - 1)
-        if 0 < candidate_count <= TOTAL_RULE_CANDIDATES else 0.0
+        (total_candidates - candidate_count) / (total_candidates - 1)
+        if total_candidates > 1 and 0 < candidate_count <= total_candidates
+        else 0.0
     )
     rule = _unique_rule(info)
     planted = {
         str(field): int(count)
         for field, count in info.get("plant_planted_counts", {}).items()
     }
-    field_one_matches = _field_matches_rule(info, "1", rule)
-    configured = CONFIGURED_POTENTIAL if field_one_matches else 0.0
+    difficulty = normalize_difficulty(info.get("plant_difficulty"))
+    if difficulty == "easy" and rule is not None:
+        configured = (
+            CONFIGURED_POTENTIAL
+            if info.get("plant_selected_nutrient") == rule.get("nutrient")
+            else 0.0
+        )
+    else:
+        field_one_matches = _field_matches_rule(info, "1", rule)
+        configured = CONFIGURED_POTENTIAL if field_one_matches else 0.0
     correctly_committed = "1" in _correct_committed_fields(info, rule)
     committed_correctly = COMMITTED_POTENTIAL if correctly_committed else 0.0
     planted_correctly = (
@@ -114,11 +127,14 @@ def target_progress_reward(env: Any, info: dict[str, Any]) -> float:
             if action != "commit_field_configuration":
                 reward += MISSED_COMMIT_PENALTY
         else:
-            nutrient, level = before_rule
-            level_name = {1: "low", 2: "medium", 3: "high"}[level]
-            expected_setter = f"set_{nutrient}_{level_name}"
+            selections = before.get("plant_field_selections", {}).get("1", {})
+            expected_setters = []
+            for nutrient, level in required_selections(before_rule).items():
+                if int(selections.get(nutrient, 0) or 0) != level:
+                    level_name = {1: "low", 2: "medium", 3: "high"}[level]
+                    expected_setters.append(f"set_{nutrient}_{level_name}")
             if isinstance(action, str) and action.startswith("set_"):
-                if action != expected_setter:
+                if action not in expected_setters:
                     reward += WRONG_LEVEL_SETTER_PENALTY
             elif action == "cancel_field_configuration":
                 reward += CANCEL_CONFIGURATION_PENALTY
@@ -164,7 +180,10 @@ def state_signature(info: dict[str, Any] | None) -> tuple[Any, ...]:
         for item in info.get("plant_experiment_memory", [])
     )
     return (
-        tuple(info.get("plant_tools", [])), experiments,
+        normalize_difficulty(info.get("plant_difficulty")),
+        tuple(info.get("plant_tools", [])),
+        experiments,
+        info.get("plant_selected_nutrient"),
         info.get("plant_active_field"),
         _canonical_selections(info),
         tuple(info.get("plant_committed_fields", [])),

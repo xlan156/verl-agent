@@ -692,6 +692,8 @@ class RayPPOTrainer:
         tool_calling_list = []
         traj_uid_list = []
         success_rate_dict = {}
+        episode_detail_list = []
+        llm_step_detail_list = []
 
         # Lists to collect samples for the table
         sample_inputs = []
@@ -754,6 +756,9 @@ class RayPPOTrainer:
                                                     wandb_step=self.global_steps,
                                                     )
             print('validation generation end')
+            llm_step_detail_list.extend(
+                test_output_gen_batch.meta_info.get("llm_step_rows", [])
+            )
             del test_batch
             test_batch = test_output_gen_batch
             # Store generated outputs
@@ -773,6 +778,28 @@ class RayPPOTrainer:
             data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
             tool_calling_list.append(test_output_gen_batch.non_tensor_batch['tool_callings'])
             traj_uid_list.append(test_output_gen_batch.non_tensor_batch['traj_uid'])
+            if self.config.trainer.get("log_eval_steps", False):
+                detail_keys = (
+                    "traj_uid",
+                    "eval_seed",
+                    "episode_success",
+                    "episode_task_score",
+                    "episode_lengths",
+                    "episode_rewards",
+                    "is_action_valid",
+                )
+                missing_keys = [
+                    key for key in detail_keys
+                    if key not in test_output_gen_batch.non_tensor_batch
+                ]
+                if missing_keys:
+                    raise KeyError(
+                        f"Validation episode metrics require fields: {missing_keys}"
+                    )
+                episode_detail_list.append({
+                    key: np.asarray(test_output_gen_batch.non_tensor_batch[key])
+                    for key in detail_keys
+                })
             # success rate
             for k in test_batch.non_tensor_batch.keys():
                 if 'success_rate' in k:
@@ -824,6 +851,54 @@ class RayPPOTrainer:
         for k, v in success_rate.items():
             metric_dict[f'val/{k}'] = v
 
+        if episode_detail_list:
+            episode_data = {
+                key: np.concatenate([batch[key] for batch in episode_detail_list])
+                for key in episode_detail_list[0]
+            }
+            _, first_indices = np.unique(episode_data["traj_uid"], return_index=True)
+            first_indices.sort()
+            successes_by_seed = {}
+            for episode_index, first_index in enumerate(first_indices):
+                trajectory_mask = episode_data["traj_uid"] == episode_data["traj_uid"][first_index]
+                steps = int(episode_data["episode_lengths"][first_index])
+                trajectory_id = str(episode_data["traj_uid"][first_index])
+                trajectory_rows = [
+                    row for row in llm_step_detail_list
+                    if row.get("active") and row.get("trajectory_id") == trajectory_id
+                ]
+                if trajectory_rows:
+                    if len(trajectory_rows) != steps:
+                        raise RuntimeError(
+                            f"Trajectory {trajectory_id} has episode_lengths={steps} "
+                            f"but {len(trajectory_rows)} active LLM-step rows"
+                        )
+                    valid_actions = sum(
+                        bool(row.get("is_action_valid")) for row in trajectory_rows
+                    )
+                else:
+                    valid_actions = int(
+                        np.sum(episode_data["is_action_valid"][trajectory_mask])
+                    )
+                seed = int(episode_data["eval_seed"][first_index])
+                success = float(episode_data["episode_success"][first_index])
+                prefix = f"val/episode/{episode_index}"
+                metric_dict[f"{prefix}/seed"] = seed
+                metric_dict[f"{prefix}/steps"] = steps
+                metric_dict[f"{prefix}/task_score"] = float(
+                    episode_data["episode_task_score"][first_index]
+                )
+                metric_dict[f"{prefix}/success"] = success
+                metric_dict[f"{prefix}/total_reward"] = float(
+                    episode_data["episode_rewards"][first_index]
+                )
+                metric_dict[f"{prefix}/valid_actions"] = valid_actions
+                metric_dict[f"{prefix}/valid_ratio"] = valid_actions / steps if steps else 0.0
+                successes_by_seed.setdefault(seed, []).append(success)
+            for seed, seed_successes in successes_by_seed.items():
+                metric_dict[f"val/success_rate_by_seed/{seed}"] = float(
+                    np.mean(seed_successes)
+                )
 
         return metric_dict
 

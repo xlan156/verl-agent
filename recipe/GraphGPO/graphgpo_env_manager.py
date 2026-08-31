@@ -696,6 +696,14 @@ def make_envs(config):
         raise ValueError("config.env.rollout.n should be an integer")
     group_n = config.env.rollout.n if config.env.rollout.n > 0 else 1
     resources_per_worker = OmegaConf.to_container(config.env.resources_per_worker, resolve=True)
+    # DiscoveryWorld is maintained in the shared environment manager. Reuse it
+    # here so GraphGPO receives the same chemistry prompts, graph anchors,
+    # action projection, seed pools, and dynamic-sampler interface as the main
+    # trainer instead of carrying a second, stale implementation.
+    if "discoveryworld" in config.env.env_name.lower():
+        from agent_system.environments.env_manager import make_envs as make_agent_envs
+
+        return make_agent_envs(config)
 
     if "search" in config.env.env_name.lower():
         from agent_system.environments.env_package.search import build_search_envs, search_projection
