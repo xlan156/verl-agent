@@ -12,14 +12,15 @@ INSTRUMENT_TYPES = (
 )
 STATIC_SKILLS = (
     "collect_reactor_instruments",
-    *(f"measure_crystal_{index}" for index in (1, 2, 3, 4)),
+    *(f"measure_crystal_{index}" for index in (1, 2, 3, 4, 5)),
     "install_crystal_3",
     "install_crystal_4",
+    "install_crystal_5",
 )
-FREQUENCY_SKILL_RE = re.compile(r"^set_reactor_([34])_frequency_(\d{1,5})$")
+FREQUENCY_SKILL_RE = re.compile(r"^set_reactor_([3-5])_frequency_(\d{1,5})$")
 
 
-class ReactorNormalSkill(ObservableSkillRunner):
+class ReactorSkill(ObservableSkillRunner):
     def __init__(self, env: Any) -> None:
         super().__init__(env)
         env.reactor_experiment_memory = {}
@@ -28,10 +29,12 @@ class ReactorNormalSkill(ObservableSkillRunner):
             "collect_reactor_instruments": self.collect_instruments,
             **{
                 f"measure_crystal_{index}": lambda index=index: self.measure_crystal(index)
-                for index in (1, 2, 3, 4)
+                for index in (1, 2, 3, 4, 5)
             },
-            "install_crystal_3": lambda: self.install_crystal(3),
-            "install_crystal_4": lambda: self.install_crystal(4),
+            **{
+                f"install_crystal_{index}": lambda index=index: self.install_crystal(index)
+                for index in (3, 4, 5)
+            },
         }
 
     def _numbered(self, obj_type: str, index: int) -> Any | None:
@@ -56,8 +59,9 @@ class ReactorNormalSkill(ObservableSkillRunner):
             obj = next(iter(self.objects(obj_type)), None)
             if obj is not None and self.pickup(obj):
                 acquired.append(obj.name)
+        required_instruments = 1 if str(getattr(self.env, "_difficulty", "Normal")).lower() == "easy" else len(INSTRUMENT_TYPES)
         self.finish(
-            len(acquired) == len(INSTRUMENT_TYPES),
+            len(acquired) >= required_instruments,
             f"Collected reactor instruments: {', '.join(acquired)}",
         )
 
@@ -93,13 +97,20 @@ class ReactorNormalSkill(ObservableSkillRunner):
     def measure_crystal(self, index: int) -> None:
         crystal = self._crystal(index)
         instruments = [next(iter(self.objects(kind)), None) for kind in INSTRUMENT_TYPES]
-        if crystal is None or any(item is None or not self._inside_inventory(item) for item in instruments):
-            self.finish(False, "Collect all instruments first")
+        if str(getattr(self.env, "_difficulty", "Normal")).lower() == "easy":
+            instruments = [item for item in instruments if item is not None]
+        required_instruments = 1 if str(getattr(self.env, "_difficulty", "Normal")).lower() == "easy" else len(INSTRUMENT_TYPES)
+        if crystal is None or sum(item is not None and self._inside_inventory(item) for item in instruments) < required_instruments:
+            self.finish(False, "Collect the required reactor instruments first")
             return
         original_reactor = self._containing_reactor(crystal)
         known_frequency = (
             self._observe_reactor_frequency(original_reactor)
-            if original_reactor is not None and index in (1, 2)
+            if original_reactor is not None and (
+                index in (1, 2) or (
+                    str(getattr(self.env, "_difficulty", "")).lower() == "challenge" and index == 3
+                )
+            )
             else None
         )
         if not self.pickup(crystal):

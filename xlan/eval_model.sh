@@ -30,7 +30,7 @@ MODEL_PATH="${MODEL_PATH:-Qwen/$MODEL_NAME}"
 #CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-n2-0822-dynamic-group4-Qwen2.5-1.5B-Instruct/best_val_success}"
 
 #n2
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-n2-0820-uniform-teacher-group4/best_val_success}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Plant-Nutrients-Agent/gigpo-0828-dynamic-teacher-plant-group6/best_val_success}"
 
 
 # DiscoveryWorld task. Chemistry remains the default for backward compatibility.
@@ -77,7 +77,6 @@ MAX_STEP="${MAX_STEP:-80}"
 MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-512}"
 VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
 VAL_TOP_P="${VAL_TOP_P:-0.9}"
-DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
 EVAL_SEED="${EVAL_SEED:-0}"
 NUM_GPUS="${NUM_GPUS:-1}"
 NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.05}"
@@ -142,7 +141,6 @@ python xlan/eval_discoveryworld_checkpoint.py \
     --max-response-length "$MAX_RESPONSE_LENGTH" \
     --temperature "$VAL_TEMPERATURE" \
     --top-p "$VAL_TOP_P" \
-    --env-variant "$DISCOVERYWORLD_ENV_VARIANT" \
     --seed "$EVAL_SEED" \
     --num-gpus "$NUM_GPUS" \
     --num-cpus-per-env "$NUM_CPUS_PER_ENV_WORKER" \

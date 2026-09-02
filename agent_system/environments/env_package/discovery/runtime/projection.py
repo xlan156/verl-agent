@@ -106,7 +106,12 @@ def discoveryworld_projection(
             valid_skills = set(prompt_valid_skills or [])
             
             if skill not in valid_skills:
-                skill = None
+                dynamic_reactor = bool((info or {}).get("reactor_dynamic_frequency"))
+                dynamic_match = re.fullmatch(r"set_reactor_([3-5])_frequency_(\d{1,5})", skill)
+                if not (dynamic_reactor and dynamic_match is not None
+                        and int(dynamic_match.group(2)) <= 10000
+                        and "set_reactor_{}_frequency_<number>".format(dynamic_match.group(1)) in valid_skills):
+                    skill = None
                 
         processed.append(skill)
         valids.append(int(skill is not None))

@@ -60,6 +60,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         frames_dir: Optional[str] = None,
         max_chemical_n: Optional[int] = None,
         teacher_skill_reward_coef: float = 1.0,
+        ingame_reward_coef: float = 1.0,
     ) -> None:
         self._seed = seed
         self._scenario_name = scenario_name
@@ -70,6 +71,7 @@ class DiscoveryWorldEnv(DiscoveryWorldRewardMixin):
         self._frames_dir = frames_dir
         self._max_chemical_n = int(max_chemical_n) if max_chemical_n is not None else 2
         self._teacher_skill_reward_coef = float(teacher_skill_reward_coef)
+        self._ingame_reward_coef = float(ingame_reward_coef)
         self._task_adapter = get_task_adapter(scenario_name)
         self._hidden_chemical_target: Optional[Tuple[int, ...]] = None
         self._api: Optional[DiscoveryWorldAPI] = None
@@ -272,9 +274,8 @@ class DiscoveryWorldWorker:
         self._seed = int(seed)
         self._thread_id = int(thread_id)
         worker_config = DiscoveryWorkerConfig.from_env_kwargs(env_kwargs=env_kwargs)
-        env_cls = _select_discoveryworld_env_cls(worker_config.env_variant)
 
-        self._env = env_cls(
+        self._env = DiscoveryWorldEnv(
             seed=seed,
             scenario_name=worker_config.scenario_name,
             difficulty=worker_config.difficulty,
@@ -284,6 +285,7 @@ class DiscoveryWorldWorker:
             frames_dir=worker_config.frames_dir,
             max_chemical_n=worker_config.max_chemical_n,
             teacher_skill_reward_coef=worker_config.teacher_skill_reward_coef,
+            ingame_reward_coef=worker_config.ingame_reward_coef,
         )
 
     def reset(self, kwargs: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
@@ -319,7 +321,6 @@ class DiscoveryWorldWorker:
             "max_chemical_n": self._env._max_chemical_n,
             "scenario_name": self._env._scenario_name,
             "difficulty": self._env._difficulty,
-            "env_variant": self._env.__class__.__name__,
         }
 
 
@@ -347,7 +348,6 @@ class DiscoveryWorldVectorEnv:
         self._worker_seeds: List[int] = []
         self._max_chemical_n = coerce_max_chemical_n(env_kwargs)
         self._target_train_fraction = float(env_kwargs.get("target_train_fraction", 0.8))
-        self._env_variant = str(env_kwargs.get("env_variant", "original")).strip().lower()
         self._task_family = task_family_for_scenario(env_kwargs.get("scenario_name"))
         if self._task_family == "chemistry":
             self._target_seed_pools = build_ordered_seed_pools_by_amount(
@@ -386,7 +386,6 @@ class DiscoveryWorldVectorEnv:
         if coerce_bool(env_kwargs.get("save_frames")) and "frames_dir" not in env_kwargs:
             env_kwargs["frames_dir"] = build_frames_dir(env_kwargs, seed, is_train)
         env_kwargs["target_train_fraction"] = self._target_train_fraction
-        env_kwargs["env_variant"] = self._env_variant
 
         env_worker = ray.remote(**resources_per_worker)(DiscoveryWorldWorker)
         selected_split = "train" if self.is_train else "val"
@@ -609,35 +608,6 @@ class DiscoveryWorldVectorEnv:
         normalized.setdefault("won", False)
         obs_list.append(obs)
         info_list.append(normalized)
-
-
-# Deprecated
-def _select_discoveryworld_env_cls(env_variant: Optional[str]):
-    variant = str(env_variant or "original").strip().lower()
-    if variant in {"", "original", "default", "full"}:
-        return DiscoveryWorldEnv
-    if variant in {"pickjar", "pick_jar", "pick-jar", "jar"}:
-        from agent_system.environments.env_package.discovery.chemistry.env_variants import CCEnvPickJar
-
-        return CCEnvPickJar
-    if variant in {
-        "derustmoderate",
-        "derust_to_moderate",
-        "derust-to-moderate",
-        "moderaterust",
-        "moderate_rust",
-        "lightlyrust",
-        "lightly_rust",
-        "lightly-rust",
-        "lightlyrusted",
-    }:
-        from agent_system.environments.env_package.discovery.chemistry.env_variants import CCEnvDerustToModerate
-
-        return CCEnvDerustToModerate
-    raise ValueError(
-        f"Unsupported DiscoveryWorld env_variant={env_variant!r}. "
-        "Expected one of: original, pickjar, derustmoderate."
-    )
 
 
 def build_discoveryworld_envs(

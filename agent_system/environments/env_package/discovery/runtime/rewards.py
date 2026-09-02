@@ -43,7 +43,11 @@ class DiscoveryWorldRewardMixin:
         Reward based on score increase.
         Original score was normalized, so multiplied by a large number.
         """
-        return GAME_PROGRESS_REWARD_SCALE * (cur_score - self._prev_score)
+        return (
+            self._ingame_reward_coef
+            * GAME_PROGRESS_REWARD_SCALE
+            * (cur_score - self._prev_score)
+        )
 
     def _teacher_skill_reward(self, skill_name: Optional[str], info: Optional[Dict[str, Any]]) -> float:
         info = info or {}

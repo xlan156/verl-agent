@@ -1,6 +1,6 @@
 REACTOR_TEMPLATE_NO_HIS = """
 [TASK]
-Solve Reactor Lab (Normal): measure crystals with observable instruments, infer the frequency relationship, then tune and activate reactors 3 and 4. In crystal_and_instrument_memory, crystal_frequency is the required resonance frequency in Hz; use it in the matching set_reactor_<index>_frequency_<Hz> skill after installing that crystal. Do not assume hidden simulator state.
+Solve Reactor Lab (Normal): measure crystals with observable instruments, infer whether the relationship is linear or quadratic, calculate target frequencies yourself, then tune and activate reactors 3 and 4. Output the calculated frequency in set_reactor_<index>_frequency_<Hz>. Do not assume hidden simulator state.
 
 [STATE]
 {step_info}
@@ -22,7 +22,7 @@ one valid skill name
 
 REACTOR_TEMPLATE = """
 [TASK]
-Solve Reactor Lab (Normal): measure crystals with observable instruments, infer the frequency relationship, then tune and activate reactors 3 and 4. In crystal_and_instrument_memory, crystal_frequency is the required resonance frequency in Hz; use it in the matching set_reactor_<index>_frequency_<Hz> skill after installing that crystal. Do not assume hidden simulator state.
+Solve Reactor Lab (Normal): measure crystals with observable instruments, infer whether the relationship is linear or quadratic, calculate target frequencies yourself, then tune and activate reactors 3 and 4. Output the calculated frequency in set_reactor_<index>_frequency_<Hz>. Do not assume hidden simulator state.
 
 [STATE]
 {step_info}

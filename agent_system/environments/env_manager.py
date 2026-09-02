@@ -840,7 +840,7 @@ def make_envs(config):
         frames_dir = getattr(discovery_cfg, "frames_dir", None)
         target_train_fraction = getattr(discovery_cfg, "target_train_fraction", 0.8)
         teacher_skill_reward_coef = getattr(discovery_cfg, "teacher_skill_reward_coef", 1.0)
-        env_variant = getattr(discovery_cfg, "env_variant", "original")
+        ingame_reward_coef = getattr(discovery_cfg, "ingame_reward_coef", 1.0)
         train_seed_pool = getattr(discovery_cfg, "train_seed_pool", None)
         eval_seed_pool = getattr(discovery_cfg, "eval_seed_pool", None)
         dynamic_sampler_cfg = getattr(discovery_cfg, "dynamic_sampler", {})
@@ -861,13 +861,13 @@ def make_envs(config):
         env_kwargs = {
             "scenario_name": scenario_name,
             "difficulty": difficulty,
-            "env_variant": env_variant,
             "max_steps": config.env.max_steps,
             "train_size": config.data.train_batch_size,
             "val_size": config.data.val_batch_size,
             "max_chemical_n": max_chemical_n,
             "target_train_fraction": target_train_fraction,
             "teacher_skill_reward_coef": teacher_skill_reward_coef,
+            "ingame_reward_coef": ingame_reward_coef,
             "train_seed_pool": train_seed_pool,
             "eval_seed_pool": eval_seed_pool,
             "dynamic_sampler": dynamic_sampler,

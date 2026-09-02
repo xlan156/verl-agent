@@ -102,7 +102,8 @@ ENV_HISTORY_LENGTH="${ENV_HISTORY_LENGTH:-8}"
 ENV_SEED="${ENV_SEED:-0}"
 TRAIN_SEED_POOL="${TRAIN_SEED_POOL:-null}"
 TEACHER_REWARD_COEF="${TEACHER_REWARD_COEF:-1.0}"
-DISCOVERYWORLD_ENV_VARIANT="${DISCOVERYWORLD_ENV_VARIANT:-original}"
+# Shared chemistry/plant game-progress multiplier; 0 disables this component.
+ingame_reward_coef="${ingame_reward_coef:-1.0}"
 
 # DAPO-style adaptive seed sampling. This is shared with GRPO: the vector
 # workers dynamically reseed rollout groups, zero-variance groups are refilled,
@@ -226,10 +227,10 @@ ENVIRONMENT=(
     "env.history_length=${ENV_HISTORY_LENGTH}"
     "+env.discoveryworld.scenario_name=${SCENARIO_NAME}"
     "+env.discoveryworld.difficulty=${DIFFICULTY}"
-    "+env.discoveryworld.env_variant=${DISCOVERYWORLD_ENV_VARIANT}"
     "+env.discoveryworld.anchor_mode=${DISCOVERYWORLD_ANCHOR_MODE:-raw_obs}"
     "+env.discoveryworld.max_chemical_n=${MAX_CHEMICAL_N}"
     "+env.discoveryworld.teacher_skill_reward_coef=${TEACHER_REWARD_COEF}"
+    "+env.discoveryworld.ingame_reward_coef=${ingame_reward_coef}"
     "+env.discoveryworld.train_seed_pool=${TRAIN_SEED_POOL}"
     "+env.discoveryworld.dynamic_sampler.enable=${DYNAMIC_SEED_SAMPLER}"
     "+env.discoveryworld.dynamic_sampler.ema_alpha=${SEED_SAMPLER_EMA_ALPHA}"

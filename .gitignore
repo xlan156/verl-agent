@@ -149,5 +149,6 @@ xlan/*
 !xlan/graphpo.sh
 !xlan/graphpo_base.sh
 !xlan/eval_model.sh
+!xlan/wandb_plot.py
 xlan/curriculum_pool_summary.csv
 xlan/VENV安装.txt
