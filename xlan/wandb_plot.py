@@ -74,7 +74,10 @@ COMMON_COMPARISON = {
 
 teacher_plot = {
     **COMMON_COMPARISON,
-    "OUTPUTS": ["xlan/figures/GiGPO_teacher_success_rate.pdf"],
+    "OUTPUTS": [
+        "xlan/figures/GiGPO_teacher_sr_comparison_curve.pdf",
+        "xlan/figures/GiGPO_teacher_sr_comparison_curve.png"
+    ],
     "METHODS": [
         {
             "LABEL": "teacher coef=1.0",
@@ -196,37 +199,40 @@ EVAL_BAR_PLOT = {
         "xlan/figures/GiGPO_eval_metrics.pdf",
         "xlan/figures/GiGPO_eval_metrics.png",
     ],
-    "FIGSIZE": [7.0, 3.5],
+    "FIGSIZE": [7.0, 3.0],
     "Y_LIM": [0, 1],
     "GROUPS": [
         {
-            "LABEL": "nodynamic\nteacher=1.0",
-            "PREFIXES": ["eval-nodynamic-teacher1.0"],
-        },
-        {
-            "LABEL": "dynamic\nteacher=1.0",
+            "LABEL": "VABSS\nteacher=1.0",
             "PREFIXES": ["eval-dynamic-teacher1.0", "eval-withdynamic-teacher1.0"],
         },
         {
-            "LABEL": "dynamic\nteacher=0.0",
+            "LABEL": "original\nteacher=1.0",
+            "PREFIXES": ["eval-nodynamic-teacher1.0"],
+        },
+        {
+            "LABEL": "VABSS\nteacher=0.0",
             "PREFIXES": ["eval-dynamic-teacher0.0", "eval-withdynamic-teacher0.0"],
         },
         {
-            "LABEL": "nodynamic\nteacher=0.0",
-            "PREFIXES": ["eval-nodynamic-teacher0.0"],
+            "LABEL": "original\nteacher=0.0",
+            "FILE_PATTERN": (
+                "gigpo-n2-nodynamic-teacher0.0-Qwen2.5-0.5B-Instruct-0902-"
+                "eval-n{n}-eval-n{n}-26323880.json"
+            ),
         },
     ],
     "METRICS": [
-        {"LABEL": "Success rate", "COLOR": "#0072B2"},
-        {"LABEL": "Valid action ratio", "COLOR": "#D55E00"},
-        {"LABEL": "Task efficiency", "COLOR": "#009E73"},
+        {"LABEL": "Valid action ratio", "COLOR": "#CA294C", "VALUE_INDEX": 1},
+        {"LABEL": "Success rate", "COLOR": "#E69F00", "VALUE_INDEX": 0},
+        {"LABEL": "Task efficiency", "COLOR": "#0072B2", "VALUE_INDEX": 2},
     ],
     "LEGEND": {
         "loc": "lower center",
-        "bbox_to_anchor": [0.5, 0.02],
+        "bbox_to_anchor": [0.5, 0.08],
         "ncol": 3,
     },
-    "MARGINS": {"left": 0.10, "right": 0.98, "bottom": 0.30, "top": 0.95},
+    "MARGINS": {"left": 0.10, "right": 0.98, "bottom": 0.36, "top": 0.95},
 }
 
 
@@ -662,14 +668,16 @@ def _mean_std_band(
 PAPER_STYLE: dict[str, Any] = {
     "font.family": "serif",
     "font.serif": ["Times New Roman", "Nimbus Roman"],
-    "font.size": 9,
-    "axes.labelsize": 9,
-    "axes.titlesize": 10,
+    "font.size": 11,
+    "axes.labelsize": 11,
+    "axes.titlesize": 12,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
     "axes.linewidth": 0.8,
     "axes.grid": True,
     "grid.alpha": 0.22,
     "grid.linewidth": 0.55,
-    "legend.fontsize": 8,
+    "legend.fontsize": 12,
     "lines.linewidth": 1.8,
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
@@ -1217,6 +1225,17 @@ def _evaluation_metrics(path: Path, expected_n: int) -> tuple[float, float, floa
 def _evaluation_group_files(
     results_dir: Path, group: Mapping[str, Any]
 ) -> list[Path]:
+    pattern = group.get("FILE_PATTERN")
+    if isinstance(pattern, str):
+        files = [results_dir / pattern.format(n=n) for n in range(1, 5)]
+        if all(path.is_file() for path in files):
+            return files
+        expected = pattern.format(n="1..4")
+        raise WandbDataError(
+            f"Evaluation group {group.get('LABEL')!r} is incomplete; expected "
+            f"{expected} under {results_dir}"
+        )
+
     prefixes = group.get("PREFIXES", [])
     if not isinstance(prefixes, list) or not prefixes:
         raise WandbDataError(f"Evaluation group {group.get('LABEL')!r} needs PREFIXES")
@@ -1262,19 +1281,20 @@ def evaluation_bar_plot(
     with plt.rc_context(dict(PAPER_STYLE)):
         fig, ax = plt.subplots(figsize=settings.get("FIGSIZE", [7.0, 3.5]))
         centers = list(range(len(groups)))
-        width = 0.24
-        offsets = (-width, 0.0, width)
+        width = 0.18
+        offsets = (-0.23, 0.0, 0.23)
         for metric_index, (metric, offset) in enumerate(zip(metric_specs, offsets)):
+            value_index = int(metric.get("VALUE_INDEX", metric_index))
             ax.bar(
                 [center + offset for center in centers],
-                [values[metric_index] for values in group_values],
+                [values[value_index] for values in group_values],
                 width=width,
                 label=str(metric.get("LABEL", f"Metric {metric_index + 1}")),
                 color=str(metric.get("COLOR", "#0072B2")),
             )
 
         ax.set_xticks(centers, [str(group.get("LABEL", "Group")) for group in groups])
-        ax.set_ylabel("Mean score across N=1–4")
+        ax.set_ylabel("Mean score across all difficulties")
         ax.set_ylim(*settings.get("Y_LIM", [0, 1]))
         ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
         ax.grid(axis="x", visible=False)

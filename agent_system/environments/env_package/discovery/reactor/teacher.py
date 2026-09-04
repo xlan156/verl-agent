@@ -1,13 +1,43 @@
 from __future__ import annotations
 
+import random
 from typing import Any
 
 DIMENSIONS = ("density", "temperature", "quantum_size", "radiation", "spectrum_channel_4")
+DEFAULT_SUBOPTIMAL_PROBABILITY = 0.6
 
 
 class ReactorRuleBasedTeacher:
-    def __init__(self, env: Any) -> None:
+    """Observation-only teacher with reproducible, recoverable lapses."""
+
+    def __init__(
+        self,
+        env: Any,
+        suboptimal_probability: float = DEFAULT_SUBOPTIMAL_PROBABILITY,
+        rng_seed: int | None = None,
+    ) -> None:
         self.env = env
+        self.suboptimal_probability = float(suboptimal_probability)
+        if not 0.0 <= self.suboptimal_probability <= 1.0:
+            raise ValueError("suboptimal_probability must be in [0, 1]")
+        if rng_seed is None:
+            rng_seed = (
+                (int(getattr(env, "_seed", 0)) << 16)
+                ^ int(getattr(env, "_thread_id", 0))
+                ^ 0x4EA7
+            )
+        self._rng = random.Random(rng_seed)
+        self.last_selection_mode = None
+        self.last_greedy_skill = None
+
+    def _select(self, greedy: str, suboptimal: list[str] | None = None) -> str:
+        self.last_greedy_skill = greedy
+        self.last_selection_mode = "greedy"
+        choices = [skill for skill in (suboptimal or []) if skill != greedy]
+        if choices and self._rng.random() < self.suboptimal_probability:
+            self.last_selection_mode = "suboptimal"
+            return self._rng.choice(choices)
+        return greedy
 
     @staticmethod
     def infer_model(memory: dict[str, Any]) -> dict[str, Any] | None:
@@ -39,24 +69,40 @@ class ReactorRuleBasedTeacher:
     def select_skill(self, info: dict[str, Any]) -> str | None:
         required_instruments = 1 if str(getattr(self.env, "_difficulty", "Normal")).lower() == "easy" else 5
         if len(info.get("reactor_instruments", [])) < required_instruments:
-            return "collect_reactor_instruments"
+            return self._select("collect_reactor_instruments")
         difficulty = str(getattr(self.env, "_difficulty", "Normal")).lower()
         known_indices = (1, 2, 3) if difficulty == "challenge" else (1, 2)
         target_indices = {"easy": (3,), "normal": (3, 4), "challenge": (4, 5)}[difficulty]
         memory = info.get("reactor_experiment_memory", {})
         for index in known_indices:
             if str(index) not in memory:
-                return f"measure_crystal_{index}"
+                crystal_count = {"easy": 3, "normal": 4, "challenge": 5}[difficulty]
+                alternatives = [
+                    f"measure_crystal_{other}"
+                    for other in range(1, crystal_count + 1)
+                    if other != index and str(other) not in memory
+                ]
+                return self._select(f"measure_crystal_{index}", alternatives)
         model = self.infer_model(memory)
         for index in target_indices:
             if str(index) not in memory:
-                return f"measure_crystal_{index}"
+                alternatives = [
+                    f"measure_crystal_{other}"
+                    for other in target_indices
+                    if other != index and str(other) not in memory
+                ]
+                return self._select(f"measure_crystal_{index}", alternatives)
             reactor = info.get("reactor_states", {}).get(str(index), {})
             if not reactor.get("has_crystal"):
-                return f"install_crystal_{index}"
+                return self._select(f"install_crystal_{index}")
             if not reactor.get("activated") and model is not None:
                 value = float(memory[str(index)]["readings"][model["dimension"]])
                 target = (model["slope"] * value + model["offset"] if model["degree"] == 1 else
                           model["a"] * value * value + model["b"] * value + model["c"])
-                return f"set_reactor_{index}_frequency_{int(round(target, 2))}"
+                target_frequency = int(round(target, 2))
+                wrong_frequency = max(0, min(10000, target_frequency + (1 if target_frequency < 10000 else -1)))
+                return self._select(
+                    f"set_reactor_{index}_frequency_{target_frequency}",
+                    [f"set_reactor_{index}_frequency_{wrong_frequency}"],
+                )
         return None

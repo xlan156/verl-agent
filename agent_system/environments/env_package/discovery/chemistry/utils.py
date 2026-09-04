@@ -245,7 +245,7 @@ def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical
         # Removing an absent chemical cannot change the state. Mask only those
         # physically impossible no-ops; all present chemicals remain equally
         # available, without belief- or teacher-based recommendations.
-        return [
+        removal_skills = [
             skill
             for name, skill in zip(
                 CHEMICAL_NAMES,
@@ -258,6 +258,10 @@ def get_valid_discoveryworld_skills(info: Optional[Dict[str, Any]], max_chemical
             )
             if int(chemical_dict.get(name, 0) or 0) > 0
         ]
+        # Washing is always a physically valid way to clear a non-empty jar.
+        # In particular, this prevents N=1 from collapsing to a forced single
+        # remove action after every assay and preserves a genuine policy choice.
+        return [*removal_skills, WASH]
 
     return list(ORDERED_SKILL_NAMES)
 

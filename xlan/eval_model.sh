@@ -30,11 +30,11 @@ MODEL_PATH="${MODEL_PATH:-Qwen/$MODEL_NAME}"
 #CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Combinatorial-Chemistry-Agent/gigpo-n2-0822-dynamic-group4-Qwen2.5-1.5B-Instruct/best_val_success}"
 
 #n2
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Plant-Nutrients-Agent/gigpo-0828-dynamic-teacher-plant-group6/best_val_success}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-/home/xlan1/projects/verl-agent/checkpoints/Plant-Nutrients-Agent/gigpo-plant-baseline-nodynamic-teacher0.0-epoch50-step25-0903/best_val_success}"
 
 
 # DiscoveryWorld task. Chemistry remains the default for backward compatibility.
-DISCOVERY_TASK="${DISCOVERY_TASK:-chemistry}"
+DISCOVERY_TASK="${DISCOVERY_TASK:-plant}"
 case "$DISCOVERY_TASK" in
     chemistry)
         SCENARIO_NAME="${SCENARIO_NAME:-Combinatorial Chemistry}"
@@ -55,25 +55,30 @@ esac
 # N = 2: EVAL_SIZE=4
 # N = 3: EVAL_SIZE=8
 # N = 4: EVAL_SIZE=14
-MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-3}"
+MAX_CHEMICAL_N="${MAX_CHEMICAL_N:-4}"
 EVAL_SPLIT="${EVAL_SPLIT:-val}"
-case "$MAX_CHEMICAL_N" in
-    1) DEFAULT_EVAL_SIZE=1 ;;
-    2) DEFAULT_EVAL_SIZE=2 ;;
-    3) DEFAULT_EVAL_SIZE=4 ;;
-    4) DEFAULT_EVAL_SIZE=7 ;;
-    *)
-        echo "Unsupported MAX_CHEMICAL_N=$MAX_CHEMICAL_N; set EVAL_SIZE explicitly" >&2
-        exit 1
-        ;;
-esac
+if [[ "$DISCOVERY_TASK" == "plant" ]]; then
+    # Match the worker's default 80/20 split over Plant seeds 0..99.
+    DEFAULT_EVAL_SIZE=20
+else
+    case "$MAX_CHEMICAL_N" in
+        1) DEFAULT_EVAL_SIZE=1 ;;
+        2) DEFAULT_EVAL_SIZE=2 ;;
+        3) DEFAULT_EVAL_SIZE=4 ;;
+        4) DEFAULT_EVAL_SIZE=7 ;;
+        *)
+            echo "Unsupported MAX_CHEMICAL_N=$MAX_CHEMICAL_N; set EVAL_SIZE explicitly" >&2
+            exit 1
+            ;;
+    esac
+fi
 EVAL_SIZE="${EVAL_SIZE:-${VAL_SIZE:-$DEFAULT_EVAL_SIZE}}"
 ROLLOUTS_PER_SEED="${ROLLOUTS_PER_SEED:-5}"
 EVAL_SEEDS="${EVAL_SEEDS:-}"
 TARGET_TRAIN_FRACTION="${TARGET_TRAIN_FRACTION:-0.8}"
 
 # Environment and generation
-MAX_STEP="${MAX_STEP:-80}"
+MAX_STEP="${MAX_STEP:-25}"
 MAX_RESPONSE_LENGTH="${MAX_RESPONSE_LENGTH:-512}"
 VAL_TEMPERATURE="${VAL_TEMPERATURE:-0.4}"
 VAL_TOP_P="${VAL_TOP_P:-0.9}"
@@ -82,7 +87,12 @@ NUM_GPUS="${NUM_GPUS:-1}"
 NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.05}"
 
 # Output and logging
-OUTPUT_PATH="${OUTPUT_PATH:-xlan/results/discoveryworld-eval-${DISCOVERY_TASK}-${DIFFICULTY,,}-${EVAL_MODE}-${MODEL_NAME}-${SLURM_JOB_ID:-local}.json}"
+if [[ "$DISCOVERY_TASK" == "chemistry" ]]; then
+    OUTPUT_DIFFICULTY="n${MAX_CHEMICAL_N}"
+else
+    OUTPUT_DIFFICULTY="${DIFFICULTY,,}"
+fi
+OUTPUT_PATH="${OUTPUT_PATH:-xlan/results/${DISCOVERY_TASK}-${MODEL_NAME}-${SLURM_JOB_ID:-local}/${OUTPUT_DIFFICULTY}.json}"
 LOG_LLM_STEPS="${LOG_LLM_STEPS:-true}"
 PROJECT_NAME="${PROJECT_NAME:-Eval DiscoveryWorld}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-${EVAL_MODE}-eval-${DISCOVERY_TASK}-${DIFFICULTY,,}-${SLURM_JOB_ID:-local}}"

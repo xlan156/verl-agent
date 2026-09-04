@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from itertools import combinations
+import random
 from typing import Any
 
 from .skills import LEVELS, NUTRIENTS
 
 
 Rule = dict[str, Any]
+DEFAULT_SUBOPTIMAL_PROBABILITY = 0.6
 
 
 def normalize_difficulty(value: Any) -> str:
@@ -122,8 +124,36 @@ def field_satisfies_rule(rule: Rule, selections: dict[str, Any]) -> bool:
 
 
 class PlantRuleBasedTeacher:
-    def __init__(self, env: Any) -> None:
+    """Observation-only teacher with reproducible, recoverable lapses."""
+
+    def __init__(
+        self,
+        env: Any,
+        suboptimal_probability: float = DEFAULT_SUBOPTIMAL_PROBABILITY,
+        rng_seed: int | None = None,
+    ) -> None:
         self.env = env
+        self.suboptimal_probability = float(suboptimal_probability)
+        if not 0.0 <= self.suboptimal_probability <= 1.0:
+            raise ValueError("suboptimal_probability must be in [0, 1]")
+        if rng_seed is None:
+            rng_seed = (
+                (int(getattr(env, "_seed", 0)) << 16)
+                ^ int(getattr(env, "_thread_id", 0))
+                ^ 0x71A9
+            )
+        self._rng = random.Random(rng_seed)
+        self.last_selection_mode = None
+        self.last_greedy_skill = None
+
+    def _select(self, greedy: str, suboptimal: list[str] | None = None) -> str:
+        self.last_greedy_skill = greedy
+        self.last_selection_mode = "greedy"
+        choices = [skill for skill in (suboptimal or []) if skill != greedy]
+        if choices and self._rng.random() < self.suboptimal_probability:
+            self.last_selection_mode = "suboptimal"
+            return self._rng.choice(choices)
+        return greedy
 
     @staticmethod
     def candidates(info: dict[str, Any]) -> list[Rule]:
@@ -150,21 +180,28 @@ class PlantRuleBasedTeacher:
             return None
         difficulty = normalize_difficulty(info.get("plant_difficulty"))
         if not self._tools_ready(info):
-            return "collect_plant_tools"
+            return self._select("collect_plant_tools")
 
         candidates = self.candidates(info)
         unmeasured = int(info.get("plant_unmeasured_plots", 0) or 0)
         measurements = len(info.get("plant_experiment_memory", []))
         if difficulty == "easy" and measurements < 2 and unmeasured > 0:
-            return "measure_next_pilot_plot"
+            return self._select("measure_next_pilot_plot")
         if len(candidates) != 1 and unmeasured > 0:
-            return "measure_next_pilot_plot"
+            return self._select("measure_next_pilot_plot")
         if len(candidates) != 1:
             return None
 
         rule = candidates[0]
         if difficulty == "easy":
-            return f"select_{rule['nutrient']}"
+            return self._select(
+                f"select_{rule['nutrient']}",
+                [
+                    f"select_{nutrient}"
+                    for nutrient in NUTRIENTS
+                    if nutrient != rule["nutrient"]
+                ],
+            )
 
         active = info.get("plant_active_field")
         selections = info.get("plant_field_selections", {})
@@ -175,17 +212,22 @@ class PlantRuleBasedTeacher:
                     level = next(
                         name for name, number in LEVELS.items() if number == value
                     )
-                    return f"set_{nutrient}_{level}"
-            return "commit_field_configuration"
+                    wrong_levels = [
+                        f"set_{nutrient}_{name}"
+                        for name, number in LEVELS.items()
+                        if number != value
+                    ]
+                    return self._select(f"set_{nutrient}_{level}", wrong_levels)
+            return self._select("commit_field_configuration")
 
         committed = {int(value) for value in info.get("plant_committed_fields", [])}
         if 1 not in committed:
-            return "open_field_1_controller"
+            return self._select("open_field_1_controller")
         if not field_satisfies_rule(rule, selections.get("1", {})):
             return None
         planted = info.get("plant_planted_counts", {}).get("1", 0)
         if planted < 2:
-            return "plant_seed_in_field_1"
+            return self._select("plant_seed_in_field_1", ["wait_for_growth"])
         if not info.get("won", False):
-            return "wait_for_growth"
+            return self._select("wait_for_growth")
         return None

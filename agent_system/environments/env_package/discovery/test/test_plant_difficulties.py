@@ -87,6 +87,7 @@ class PlantDifficultyTest(unittest.TestCase):
 
                 with contextlib.redirect_stdout(io.StringIO()):
                     _, info = env.reset()
+                    env.teacher.suboptimal_probability = 0.0
                     for _ in range(60):
                         valid_skills = info["valid_skills"]
                         saw_policy_choice |= len(valid_skills) > 1

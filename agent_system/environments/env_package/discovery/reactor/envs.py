@@ -79,6 +79,7 @@ class TaskAdapter:
         memory = deepcopy(getattr(env, "reactor_experiment_memory", {}))
         model = ReactorRuleBasedTeacher.infer_model(memory)
         info.update(
+            reactor_difficulty=str(getattr(env, "_difficulty", "Normal")),
             reactor_instruments=instruments,
             reactor_experiment_memory=memory,
             reactor_states=states,
@@ -97,7 +98,8 @@ class TaskAdapter:
         # Phase-aware, but retain all safe choices within a phase. Measuring
         # any unmeasured crystal is observable and safe, so it remains a real
         # policy choice instead of turning the task into pure imitation.
-        if len(info.get("reactor_instruments", [])) < 5:
+        required_instruments = 1 if difficulty == "easy" else 5
+        if len(info.get("reactor_instruments", [])) < required_instruments:
             return ["collect_reactor_instruments"]
         unmeasured = [index for index in range(1, crystal_count + 1)
                       if str(index) not in memory]

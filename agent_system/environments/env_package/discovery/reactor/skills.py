@@ -128,7 +128,10 @@ class ReactorSkill(ObservableSkillRunner):
                 "known_frequency": known_frequency,
             }
             self.env.reactor_experiment_memory[str(index)] = record
-        if original_reactor is not None and index in (1, 2):
+        if original_reactor is not None and (
+            index in (1, 2)
+            or (str(getattr(self.env, "_difficulty", "")).lower() == "challenge" and index == 3)
+        ):
             success = self.teleport(original_reactor) and self.act("PUT", crystal, original_reactor) and success
         self.finish(success, f"Recorded all observable readings for crystal {index}")
 

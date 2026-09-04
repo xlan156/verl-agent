@@ -1,6 +1,10 @@
 import math
+import random
 
 from .utils import *
+
+
+DEFAULT_SUBOPTIMAL_PROBABILITY = 0.75
 
 
 class RulebasedAgent:
@@ -113,7 +117,20 @@ class RulebasedAgent:
 
 
 class RulebasedAgentSkill:
-    def __init__(self, env):
+    """Observation-only chemistry teacher with bounded-rational lapses.
+
+    The teacher never reads the simulator's hidden chemical target.  During
+    chemical search it follows the best belief-based action most of the time,
+    but deliberately chooses a strictly lower-ranked action with probability
+    ``suboptimal_probability`` when one exists.
+    """
+
+    def __init__(
+        self,
+        env,
+        suboptimal_probability=DEFAULT_SUBOPTIMAL_PROBABILITY,
+        rng_seed=None,
+    ):
         self.env = env
         self.skill_counter = {}
         self.observed_combinations = set()
@@ -122,6 +139,18 @@ class RulebasedAgentSkill:
         # are present in the observation.  Do not use env._hidden_chemical_target
         # here: the teacher should have the same information as the policy.
         self.chemical_evidence = {}
+        self.suboptimal_probability = float(suboptimal_probability)
+        if not 0.0 <= self.suboptimal_probability <= 1.0:
+            raise ValueError("suboptimal_probability must be in [0, 1]")
+        if rng_seed is None:
+            rng_seed = (
+                (int(getattr(env, "_seed", 0)) << 16)
+                ^ int(getattr(env, "_thread_id", 0))
+                ^ 0x5A17
+            )
+        self._rng = random.Random(rng_seed)
+        self.last_selection_mode = None
+        self.last_greedy_skill = None
         
     def skill(self, skill_name):
         self.skill_counter[skill_name] = self.skill_counter.get(skill_name, 0) + 1
@@ -162,7 +191,7 @@ class RulebasedAgentSkill:
         )
 
     def select_use_or_remove(self, info):
-        """Choose a belief-directed, deterministic one-step experiment."""
+        """Choose a reproducible bounded-rational one-step experiment."""
         current = self.get_curr_combination(info)
         self.observed_combinations.add(current)
         targets = self.update_chemical_belief(info)
@@ -187,14 +216,19 @@ class RulebasedAgentSkill:
                 next_combo = list(current)
                 next_combo[index] -= 1
                 candidates.append((f"remove_chemical_{chemical}", tuple(next_combo)))
+            # Clearing the whole jar is executable and recoverable, but is
+            # deliberately ranked below a targeted one-unit removal.  This
+            # gives N=1 a real bounded-rational lapse instead of a forced move.
+            candidates.append((WASH, (0, 0, 0, 0)))
 
         if not candidates:
             return None
 
         def rank(candidate):
-            _, next_combo = candidate
+            action, next_combo = candidate
             unobserved = next_combo not in self.chemical_evidence
             no_immediate_undo = next_combo != self.previous_combination
+            targeted_edit = action != WASH
 
             if len(targets) == 1:
                 # Once the belief is resolved, take the edge with the largest
@@ -203,7 +237,7 @@ class RulebasedAgentSkill:
                 old_distance = sum(abs(value - goal) for value, goal in zip(current, target))
                 new_distance = sum(abs(value - goal) for value, goal in zip(next_combo, target))
                 progress = old_distance - new_distance
-                return (progress, unobserved, no_immediate_undo)
+                return (progress, unobserved, no_immediate_undo, targeted_edit)
 
             # Match the reward's realized log candidate reduction in
             # expectation. An already-observed state yields no new evidence.
@@ -224,9 +258,24 @@ class RulebasedAgentSkill:
                 unobserved,
                 -mean_distance,
                 no_immediate_undo,
+                targeted_edit,
             )
 
-        selected = max(candidates, key=rank)
+        ranked = sorted(candidates, key=rank, reverse=True)
+        greedy_rank = rank(ranked[0])
+        tied_greedy = [candidate for candidate in ranked if rank(candidate) == greedy_rank]
+        selected = self._rng.choice(tied_greedy)
+        strictly_suboptimal = [
+            candidate for candidate in ranked if rank(candidate) < greedy_rank
+        ]
+        self.last_greedy_skill = selected[0]
+        self.last_selection_mode = "greedy"
+        if (
+            strictly_suboptimal
+            and self._rng.random() < self.suboptimal_probability
+        ):
+            selected = self._rng.choice(strictly_suboptimal)
+            self.last_selection_mode = "suboptimal"
         self.previous_combination = current
         return self.skill(selected[0])
     

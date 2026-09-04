@@ -9,7 +9,7 @@ from agent_system.environments.env_package.discovery.runtime.envs import Discove
 
 class ReactorDifficultyTest(unittest.TestCase):
     def test_teacher_actions_are_valid_and_special_states_offer_choice(self):
-        for difficulty in ("Normal",):
+        for difficulty in ("Easy", "Normal", "Challenge"):
             with self.subTest(difficulty=difficulty):
                 env = DiscoveryWorldEnv(
                     seed=0, scenario_name="Reactor Lab", difficulty=difficulty, max_steps=50
@@ -17,6 +17,7 @@ class ReactorDifficultyTest(unittest.TestCase):
                 saw_multiple_choices = False
                 with contextlib.redirect_stdout(io.StringIO()):
                     _, info = env.reset()
+                    env.teacher.suboptimal_probability = 0.0
                     for _ in range(50):
                         valid_skills = info["valid_skills"]
                         saw_multiple_choices |= len(valid_skills) > 1

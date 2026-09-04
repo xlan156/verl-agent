@@ -1,6 +1,6 @@
 REACTOR_TEMPLATE_NO_HIS = """
 [TASK]
-Solve Reactor Lab (Normal): measure crystals with observable instruments, infer whether the relationship is linear or quadratic, calculate target frequencies yourself, then tune and activate reactors 3 and 4. Output the calculated frequency in set_reactor_<index>_frequency_<Hz>. Do not assume hidden simulator state.
+{task} Output the calculated integer frequency in set_reactor_<index>_frequency_<Hz>. Do not invent a skill name.
 
 [STATE]
 {step_info}
@@ -9,10 +9,12 @@ Solve Reactor Lab (Normal): measure crystals with observable instruments, infer 
 [VALID SKILLS]
 {valid_skills}
 
+Choose exactly one action from the list above. If the list contains only one skill, choose that skill.
+
 [RESPONSE]
-Return exactly this format and no other text:
+Return exactly this format and no other text. Use the literal short reason `ok`; never explain calculations:
 <think>
-one short state-based reason explaining the chosen action
+ok
 </think>
 <action>
 one valid skill name
@@ -22,7 +24,7 @@ one valid skill name
 
 REACTOR_TEMPLATE = """
 [TASK]
-Solve Reactor Lab (Normal): measure crystals with observable instruments, infer whether the relationship is linear or quadratic, calculate target frequencies yourself, then tune and activate reactors 3 and 4. Output the calculated frequency in set_reactor_<index>_frequency_<Hz>. Do not assume hidden simulator state.
+{task} Output the calculated integer frequency in set_reactor_<index>_frequency_<Hz>. Do not invent a skill name.
 
 [STATE]
 {step_info}
@@ -34,10 +36,12 @@ Solve Reactor Lab (Normal): measure crystals with observable instruments, infer 
 [VALID SKILLS]
 {valid_skills}
 
+Choose exactly one action from the list above. If the list contains only one skill, choose that skill.
+
 [RESPONSE]
-Return exactly this format and no other text:
+Return exactly this format and no other text. Use the literal short reason `ok`; never explain calculations:
 <think>
-one short state-based reason explaining the chosen action
+ok
 </think>
 <action>
 one valid skill name

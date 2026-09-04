@@ -145,7 +145,7 @@ Qw0.5merged/
 # Keep personal xlan artifacts ignored, but track the maintained job entrypoints.
 xlan/*
 !xlan/gigpo_base.sh
-!xlan/gigpo_dynamic.sh
+!xlan/gigpo_chem.sh
 !xlan/graphpo.sh
 !xlan/graphpo_base.sh
 !xlan/eval_model.sh
